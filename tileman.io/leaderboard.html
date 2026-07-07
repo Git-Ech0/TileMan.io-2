@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1">
+	<title>Leaderboard | tileman.io</title>
+	<link rel="canonical" href="https://tileman.io/leaderboard.html">
+
+	<!-- Google Fonts -->
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+	<link rel="stylesheet" href="/style.css">
+	<link rel="icon" href="/favicon.ico">
+
+	<script async src="https://www.googletagmanager.com/gtag/js?id=UA-130575008-1"></script>
+	<script>
+	window.dataLayer = window.dataLayer || [];
+	function gtag(){dataLayer.push(arguments);}
+	gtag('js', new Date());
+	gtag('config', 'UA-130575008-1');
+	gtag('config', 'G-7ZJH73V5VW');
+	</script>
+	<link rel="preload" href="/tileman-blur-black.png" as="image">
+
+	<style>
+		/* Leaderboard tab nav */
+		.lb-nav {
+			display: flex;
+			align-items: center;
+			flex-wrap: wrap;
+			gap: 8px;
+			justify-content: center;
+			margin: 14px auto 28px;
+			max-width: 700px;
+		}
+		.lb-nav .back-link {
+			font-family: 'Rajdhani', sans-serif;
+			font-size: 0.78em;
+			font-weight: 600;
+			letter-spacing: 0.1em;
+			text-transform: uppercase;
+			color: var(--text-dim, #55556A);
+			border: 1px solid var(--border, rgba(255,255,255,0.07));
+			border-radius: 4px;
+			padding: 5px 12px;
+			transition: all 0.2s;
+			margin-right: 8px;
+		}
+		.lb-nav .back-link::before { content: '← '; }
+		.lb-nav .back-link:hover {
+			color: var(--text-primary, #EEEEFF);
+			border-color: var(--border-strong, rgba(255,255,255,0.14));
+		}
+		.lb-nav a.tab {
+			font-family: 'Rajdhani', sans-serif;
+			font-size: 0.82em;
+			font-weight: 600;
+			letter-spacing: 0.08em;
+			text-transform: uppercase;
+			color: var(--text-secondary, #8888AA);
+			border: 1px solid var(--border, rgba(255,255,255,0.07));
+			border-radius: 20px;
+			padding: 6px 16px;
+			transition: all 0.2s ease;
+			background: transparent;
+		}
+		.lb-nav a.tab:hover {
+			color: var(--text-primary, #EEEEFF);
+			border-color: var(--border-strong, rgba(255,255,255,0.14));
+			background: rgba(255,255,255,0.04);
+		}
+		.lb-nav a.tab.active,
+		.lb-nav a.tab:target {
+			color: var(--text-primary, #EEEEFF);
+			border-color: rgba(232,25,44,0.6);
+			background: rgba(232,25,44,0.12);
+			box-shadow: 0 0 10px rgba(232,25,44,0.2);
+		}
+
+		/* Leaderboard block section title */
+		div.lb > h2 {
+			margin-top: 14px;
+		}
+
+		/* Stat group headings (Tiles, Kills, etc.) */
+		div.lb > h3 {
+			position: relative;
+			top: 0;
+			margin: 28px 0 8px;
+			font-size: 1em;
+			color: var(--text-secondary, #8888AA);
+		}
+
+		/* Period labels (Week / Day) */
+		.abcd h4 {
+			font-family: 'Rajdhani', sans-serif;
+			font-size: 0.72em;
+			font-weight: 600;
+			letter-spacing: 0.12em;
+			text-transform: uppercase;
+			color: var(--text-dim, #55556A);
+			margin-bottom: 6px;
+		}
+
+		/* Override base table for leaderboards */
+		.abcd table {
+			border-radius: 6px;
+			overflow: hidden;
+			min-width: 220px;
+		}
+		.abcd tr td:first-child {
+			font-family: 'Rajdhani', sans-serif;
+			font-weight: 700;
+			font-size: 0.88em;
+			color: var(--text-dim, #55556A);
+			min-width: 32px;
+		}
+		.abcd td + td {
+			font-family: 'Inter', sans-serif;
+		}
+		.abcd td + td + td {
+			font-family: 'JetBrains Mono', monospace;
+			font-size: 0.88em;
+			color: var(--text-secondary, #8888AA);
+		}
+
+		/* Rank medals */
+		.abcd tr:nth-child(1) td:first-child { color: #FFD700 !important; }
+		.abcd tr:nth-child(2) td:first-child { color: #C0C0C0 !important; }
+		.abcd tr:nth-child(3) td:first-child { color: #CD7F32 !important; }
+
+		/* Nick cells */
+		.abcd .nick {
+			user-select: none;
+		}
+
+		/* Wrapper for the whole lb block */
+		div.lb {
+			padding: 8px 0 40px;
+		}
+
+		/* Hide the anchor tags for tab functionality */
+		a.lb { position: fixed; display: none; }
+	</style>
+</head>
+<body>
+	<div id=intro>
+		<h1>TileMan.io</h1>
+
+		<nav class="lb-nav">
+			<a href="/" class="back-link">Game</a>
+			<a href="#classic"       class="tab">Classic</a>
+			<a href="#blind"         class="tab">No Kills</a>
+			<a href="#rats"          class="tab">Rats</a>
+			<a href="#extreme-speed" class="tab">Extreme Speed</a>
+		</nav>
+
+		<!-- ===== RATS ===== -->
+		<a id=rats class=lb></a>
+		<div class=lb>
+			<h2>Rats</h2>
+
+			<h3>Tiles</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=xbblo></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=xbblo2></table></div>
+
+			<h3>Kills</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=xbkil></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=xbkil2></table></div>
+
+			<h3>Time Alive</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=xbali></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=xbali2></table></div>
+
+			<h3>Snake Length</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=xbtra></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=xbtra2></table></div>
+		</div>
+
+		<!-- ===== EXTREME SPEED ===== -->
+		<a id=extreme-speed class=lb></a>
+		<div class=lb>
+			<h2>Extreme Speed</h2>
+
+			<h3>Tiles</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=xsblo></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=xsblo2></table></div>
+
+			<h3>Kills</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=xskil></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=xskil2></table></div>
+
+			<h3>Time Alive</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=xsali></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=xsali2></table></div>
+
+			<h3>Snake Length</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=xstra></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=xstra2></table></div>
+		</div>
+
+		<!-- ===== NO KILLS ===== -->
+		<a id=blind class=lb></a>
+		<div class=lb>
+			<h2>No Kills</h2>
+
+			<h3>Tiles</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=blo></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=blo2></table></div>
+
+			<h3>Kills</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=kil></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=kil2></table></div>
+
+			<h3>Time Alive</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=ali></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=ali2></table></div>
+
+			<h3>Snake Length</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=tra></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=tra2></table></div>
+		</div>
+
+		<!-- ===== CLASSIC ===== -->
+		<a id=classic class=lb></a>
+		<div class=lb>
+			<h2>Classic</h2>
+
+			<h3>Tiles</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=clblo></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=clblo2></table></div>
+
+			<h3>Kills</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=clkil></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=clkil2></table></div>
+
+			<h3>Time Alive</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=clali></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=clali2></table></div>
+
+			<h3>Snake Length</h3>
+			<div class=abcd><h4>Week</h4><table border=1 id=cltra></table></div>
+			<div class=abcd><h4>Day</h4><table border=1 id=cltra2></table></div>
+		</div>
+
+	</div>
+
+	<script>
+		if(location.hash==="")
+			location.replace(localStorage.lbmd||"#classic");
+
+		window.addEventListener("hashchange", function(){
+			localStorage.lbmd=location.hash;
+		});
+
+		// Highlight active tab
+		function setActiveTab() {
+			document.querySelectorAll('.lb-nav a.tab').forEach(function(a) {
+				a.classList.toggle('active', a.getAttribute('href') === location.hash);
+			});
+		}
+		setActiveTab();
+		window.addEventListener('hashchange', setActiveTab);
+
+		function cs(text){
+			if(localStorage.cs==="false") return text;
+			text=text.replace(/(b)it(ch)/gi, "$1♥");
+			text=text.replace(/(c)un(t)/gi, "$1♥");
+			text=text.replace(/(f)aggot/gi, "$1♥");
+			text=text.replace(/((suck|my).*d)ic(k)/gi, "$1♥");
+			text=text.replace(/(f)uc(k)/gi, "$1♥");
+			text=text.replace(/(p)or(n)/gi, "$1♥");
+			text=text.replace(/(p)uss(y)/gi, "$1♥");
+			text=text.replace(/((is|=|-).*p)edophile?/gi, "$1♥");
+			return text;
+		}
+
+		var blo=document.getElementById("blo");
+		var kil=document.getElementById("kil");
+		var ali=document.getElementById("ali");
+		var tra=document.getElementById("tra");
+		var blo2=document.getElementById("blo2");
+		var kil2=document.getElementById("kil2");
+		var ali2=document.getElementById("ali2");
+		var tra2=document.getElementById("tra2");
+
+		var xbblo=document.getElementById("xbblo");
+		var xbkil=document.getElementById("xbkil");
+		var xbali=document.getElementById("xbali");
+		var xbtra=document.getElementById("xbtra");
+		var xbblo2=document.getElementById("xbblo2");
+		var xbkil2=document.getElementById("xbkil2");
+		var xbali2=document.getElementById("xbali2");
+		var xbtra2=document.getElementById("xbtra2");
+
+		var xsblo=document.getElementById("xsblo");
+		var xskil=document.getElementById("xskil");
+		var xsali=document.getElementById("xsali");
+		var xstra=document.getElementById("xstra");
+		var xsblo2=document.getElementById("xsblo2");
+		var xskil2=document.getElementById("xskil2");
+		var xsali2=document.getElementById("xsali2");
+		var xstra2=document.getElementById("xstra2");
+
+		var clblo=document.getElementById("clblo");
+		var clkil=document.getElementById("clkil");
+		var clali=document.getElementById("clali");
+		var cltra=document.getElementById("cltra");
+		var clblo2=document.getElementById("clblo2");
+		var clkil2=document.getElementById("clkil2");
+		var clali2=document.getElementById("clali2");
+		var cltra2=document.getElementById("cltra2");
+
+		function getTimeString(time){
+			var hours=Math.floor((time / (60 * 60)) );
+			var minutes=Math.floor((time / (60)) % 60);
+			var seconds=Math.floor((time) % 60);
+			minutes = (minutes < 10) ? "0" + minutes : minutes;
+			seconds = (seconds < 10) ? "0" + seconds : seconds;
+			return hours+":"+minutes+":"+seconds;
+		}
+		function getDate(date){
+			date=new Date(date);
+			var isToday = (new Date().toDateString() == date.toDateString());
+			return (isToday?"Today":date.toLocaleDateString(undefined, { day: 'numeric', month: 'numeric' }))+" "+date.getHours()+":"+(date.getMinutes()<10?'0':'')+date.getMinutes();
+		}
+
+		var xhr = new XMLHttpRequest();
+		if(location.port!=="5000")
+			xhr.open('GET', '//db1.tileman.io/leaders.json', true);
+		else
+			xhr.open('GET', '/leaders.json', true);
+		xhr.onload = function() {
+			var jsonResponse = JSON.parse(xhr.responseText);
+
+			jsonResponse[0].forEach(function(item,index){ blo.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.blocks; })
+			jsonResponse[1].forEach(function(item,index){ kil.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.kills; })
+			jsonResponse[2].forEach(function(item,index){ ali.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+getTimeString(item.time_alive); })
+			jsonResponse[3].forEach(function(item,index){ tra.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.trail_length; })
+			jsonResponse[4].forEach(function(item,index){ blo2.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.blocks; })
+			jsonResponse[5].forEach(function(item,index){ kil2.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.kills; })
+			jsonResponse[6].forEach(function(item,index){ ali2.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+getTimeString(item.time_alive); })
+			jsonResponse[7].forEach(function(item,index){ tra2.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.trail_length; })
+
+			jsonResponse[8].forEach(function(item,index){ xbblo.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.blocks; })
+			jsonResponse[9].forEach(function(item,index){ xbkil.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.kills; })
+			jsonResponse[10].forEach(function(item,index){ xbali.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+getTimeString(item.time_alive); })
+			jsonResponse[11].forEach(function(item,index){ xbtra.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.trail_length; })
+			jsonResponse[12].forEach(function(item,index){ xbblo2.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.blocks; })
+			jsonResponse[13].forEach(function(item,index){ xbkil2.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.kills; })
+			jsonResponse[14].forEach(function(item,index){ xbali2.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+getTimeString(item.time_alive); })
+			jsonResponse[15].forEach(function(item,index){ xbtra2.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.trail_length; })
+
+			jsonResponse[16].forEach(function(item,index){ xsblo.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.blocks; })
+			jsonResponse[17].forEach(function(item,index){ xskil.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.kills; })
+			jsonResponse[18].forEach(function(item,index){ xsali.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+getTimeString(item.time_alive); })
+			jsonResponse[19].forEach(function(item,index){ xstra.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.trail_length; })
+			jsonResponse[20].forEach(function(item,index){ xsblo2.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.blocks; })
+			jsonResponse[21].forEach(function(item,index){ xskil2.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.kills; })
+			jsonResponse[22].forEach(function(item,index){ xsali2.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+getTimeString(item.time_alive); })
+			jsonResponse[23].forEach(function(item,index){ xstra2.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.trail_length; })
+
+			jsonResponse[24].forEach(function(item,index){ clblo.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.blocks; })
+			jsonResponse[25].forEach(function(item,index){ clkil.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.kills; })
+			jsonResponse[26].forEach(function(item,index){ clali.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+getTimeString(item.time_alive); })
+			jsonResponse[27].forEach(function(item,index){ cltra.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.trail_length; })
+			jsonResponse[28].forEach(function(item,index){ clblo2.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.blocks; })
+			jsonResponse[29].forEach(function(item,index){ clkil2.innerHTML+="<tr title='"+getDate(item.time)+" (time spent "+getTimeString(item.spent_time)+")'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.kills; })
+			jsonResponse[30].forEach(function(item,index){ clali2.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+getTimeString(item.time_alive); })
+			jsonResponse[31].forEach(function(item,index){ cltra2.innerHTML+="<tr title='"+getDate(item.time)+"'><td>"+ ++index +".<td class=nick>"+cs(item.nick)+"<td>"+item.trail_length; })
+		};
+		xhr.send(null);
+	</script>
+
+	<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"87c8ce72d25140bdaedcfe3c7323f022","r":1}' crossorigin="anonymous"></script>
+</body>
+</html>

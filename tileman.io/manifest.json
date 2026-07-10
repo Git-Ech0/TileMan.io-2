@@ -1,0 +1,25 @@
+{
+	"name": "TileMan.io",
+	"short_name": "TileMan.io",
+	"start_url": "/?homescreen=1",
+	"display": "fullscreen",
+	"background_color": "#1E1E1E",
+	"theme_color": "firebrick",
+	"orientation": "any",
+	"icons": [
+		{
+			"src": "/favicon.ico",
+			"sizes": "86x86"
+		},
+		{
+			"src": "/big.png",
+			"type": "image/png",
+			"sizes": "512x512"
+		},
+		{
+			"src": "/icon.png",
+			"type": "image/png",
+			"sizes": "192x192"
+		}
+	]
+}

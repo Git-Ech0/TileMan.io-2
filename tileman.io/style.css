@@ -121,7 +121,6 @@ h2 {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-primary);
-  border-left: 3px solid var(--red);
   padding-left: 12px;
   margin: 1.2em 0 0.6em;
 }

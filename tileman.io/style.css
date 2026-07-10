@@ -192,12 +192,13 @@ small { color: var(--text-secondary); font-size: 0.8em; }
 /* ===== COLORS SECTION (settings) ===== */
 #favcol { position: relative; }
 #colors {
-  padding: 5px 20px;
-  max-width: 1300px;
-  display: inline-block;
-  text-align: left;
-  columns: 6 200px;
-}
+			display: grid !important;
+			grid-template-columns: repeat(11, minmax(0, 1fr)) !important;
+			gap: 4px !important;
+			margin: 12px 0 6px !important;
+			width: 100% !important;
+			box-sizing: border-box !important;
+		}
 @media (max-width: 950px) { #colors { columns: 4 200px; } }
 @media (max-width: 600px) { #colors { columns: 2 150px; } }
 @media (max-width: 400px) { #colors { columns: auto; } }

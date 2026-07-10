@@ -264,8 +264,11 @@
 			<div id=favcol style="position:relative; max-width:100%; margin: 12px 0;">
 				<div id=colors></div>
 				
-				<!-- Hidden dummy element so main client script doesn't crash on document.getElementById -->
-				<div id=nosha style="display:none !important;"></div>
+				<!-- Hidden dummy elements so main client script doesn't crash on document.getElementById -->
+				<div id=nosha style="display:none !important;">
+					<a id=sha1 href="#"></a>
+					<a id=sha2 href="#"></a>
+				</div>
 
 				<!-- Select / Deselect All Toggle -->
 				<label style="display:flex; align-items:center; gap:8px; font-size:0.8em; color:var(--text-secondary, #8888AA); cursor:pointer; margin-top:10px; user-select:none;">

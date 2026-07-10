@@ -11,7 +11,7 @@
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
-	<link rel="stylesheet" href="/style.css">
+	<link rel="stylesheet" href="https://tileman-io.vercel.app/tileman.io/style.css">
 	<link rel="icon" href="/favicon.ico">
 
 	<script async src="https://www.googletagmanager.com/gtag/js?id=UA-130575008-1"></script>
@@ -22,8 +22,8 @@
 	gtag('config', 'UA-130575008-1');
 	gtag('config', 'G-7ZJH73V5VW');
 	</script>
-	<script src="/chroma.min.js"></script>
-	<link rel="preload" href="/tileman-blur-black.png" as="image">
+	<script src="https://tileman-io.vercel.app/tileman.io/chroma.min.js"></script>
+	<link rel="preload" href="https://tileman-io.vercel.app/tileman.io/tileman-blur-black.png" as="image">
 
 	<style>
 		/* Settings page-specific extras */
@@ -285,6 +285,11 @@
 					<option value="0.5">Low</option>
 				</select>
 			</div>
+
+			<div class="range-row">
+				<span>Camera zoom</span>
+				<input type=range id=camzoom value=0.8 min=0.5 max=1.2 step=0.05>
+			</div>
 		</div>
 
 		<!-- ADVANCED -->
@@ -323,7 +328,7 @@
 		<br>
 	</div>
 
-	<script src="/hra.min.js"></script>
+	<script src="https://tileman-io.vercel.app/tileman.io/hra.min.js%3Ffu"></script>
 	<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"87c8ce72d25140bdaedcfe3c7323f022","r":1}' crossorigin="anonymous"></script>
 </body>
 </html>

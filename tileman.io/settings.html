@@ -12,7 +12,7 @@
 	<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
 	<link rel="stylesheet" href="https://tileman-io.vercel.app/tileman.io/style.css">
-	<link rel="icon" href="/favicon.ico">
+	<link rel="icon" href="https://tileman-io.vercel.app/tileman.io/favicon.ico">
 
 	<script async src="https://www.googletagmanager.com/gtag/js?id=UA-130575008-1"></script>
 	<script>
@@ -187,15 +187,17 @@
 			text-align: left;
 		}
 
-		/* Modern, Compact Color Favorites Grid */
+		/* Modern, Boundary-Safe Responsive Color favorites grid (11 Columns) */
 		#colors {
 			display: grid;
-			grid-template-columns: repeat(23, 1fr); /* 69 colors / 3 rows = 23 columns */
+			grid-template-columns: repeat(11, minmax(0, 1fr)); /* Exactly 11 columns */
 			gap: 4px;
 			margin: 12px 0 6px;
+			width: 100%;
+			box-sizing: border-box;
 		}
 		#colors br {
-			display: none !important; /* Ignore old hardcoded breaks */
+			display: none !important; /* Ignore legacy hardcoded line breaks */
 		}
 		.colorbox {
 			aspect-ratio: 1;
@@ -208,29 +210,26 @@
 			justify-content: center;
 			position: relative;
 			transition: transform 0.1s ease;
+			box-sizing: border-box;
 		}
 		.colorbox:hover {
 			transform: scale(1.22);
 			z-index: 5;
-			border-color: rgba(255,255,255,0.4);
 		}
 		.colorbox input[type=checkbox] {
 			width: 100%;
 			height: 100%;
-			opacity: 0; /* Hide actual box completely */
+			opacity: 0; /* Fully hide default checkbox */
 			cursor: pointer;
 			position: absolute;
 			top: 0; left: 0;
 			margin: 0;
 		}
-		/* Dot indicator inside active favorite colors */
-		.colorbox:has(input[type=checkbox]:checked)::after {
-			content: '';
-			width: 6px;
-			height: 6px;
-			border-radius: 50%;
-			background: #ffffff;
-			box-shadow: 0 0 3px rgba(0,0,0,0.6);
+		/* Crisp white outline for active favorite colors */
+		.colorbox:has(input[type=checkbox]:checked) {
+			outline: 2px solid #ffffff;
+			outline-offset: -2px; /* Pull outline inside bounds */
+			box-shadow: 0 0 6px rgba(255,255,255,0.7);
 		}
 	</style>
 </head>
@@ -243,14 +242,6 @@
 		<h1>TileMan.io</h1>
 		<h2>Settings</h2>
 
-		<script>
-		var aiptag = aiptag || {};
-		aiptag.cmd = aiptag.cmd || [];
-		aiptag.cmd.display = aiptag.cmd.display || [];
-		aiptag.cmd.player = aiptag.cmd.player || [];
-		</script>
-		<script async src="https://api.adinplay.com/libs/aiptag/pub/TMN/tileman.io/tag.min.js"></script>
-
 		<!-- COLORS & GRAPHICS -->
 		<div class="settings-section">
 			<h3>Colors &amp; Graphics</h3>
@@ -261,14 +252,15 @@
 
 			<div id=favcol style="position:relative; max-width:100%; margin: 12px 0;">
 				<div id=colors></div>
-				<div id=nosha>
-					<div>
-						<a id=sha1 href="https://www.facebook.com/sharer/sharer.php?u=tileman.io" target="_blank" onauxclick="localStorage.sha=true;">Share</a>
-						or
-						<a id=sha2 href="https://twitter.com/intent/tweet?hashtags=tilemanio&text=Play%20this%20game&url=http%3A%2F%2Ftileman.io" target="_blank" onauxclick="localStorage.sha=true;">Tweet</a>
-						to unlock color selection.
-					</div>
-				</div>
+				
+				<!-- Hidden dummy element so main client script doesn't crash on document.getElementById -->
+				<div id=nosha style="display:none !important;"></div>
+
+				<!-- Select / Deselect All Toggle -->
+				<label style="display:flex; align-items:center; gap:8px; font-size:0.8em; color:var(--text-secondary, #8888AA); cursor:pointer; margin-top:10px; user-select:none;">
+					<input type=checkbox id=colsel style="accent-color:#E8192C; width:14px; height:14px; cursor:pointer;">
+					<span>Select / Deselect All Colors</span>
+				</label>
 			</div>
 
 			<div class="range-row">
@@ -350,10 +342,7 @@
 			</div>
 
 			<div class="check-row">
-				<label style="flex:1; display:flex; flex-direction:column; gap:2px; align-items:flex-start;">
-					<span>Show real server position</span>
-					<span class="note">Renders a semi-transparent dot at your actual server coordinates. Useful for lag testing.</span>
-				</label>
+				<span>Show real server position</span>
 				<input type=checkbox id=rp>
 			</div>
 

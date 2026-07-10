@@ -321,13 +321,13 @@ a.lb:target + div.lb { display: block; }
   border: 1px solid transparent;
 }
 #social a:hover { text-decoration: none; opacity: 1; color: white; }
-#social a.tw-link  { background-color: rgba(27,149,224,0.35);  background-image: url(/twitter.png); padding-left: 26px; }
+#social a.tw-link  { background-color: rgba(27,149,224,0.35);  background-image: url(https://tileman-io.vercel.app/tileman.io/twitter.png); padding-left: 26px; }
 #social a.tw-link:hover  { background-color: rgba(27,149,224,0.7);  border-color: rgba(27,149,224,0.5); }
-#social a.fa       { background-color: rgba(59,89,152,0.35);   background-image: url(/fb.png);      padding-left: 26px; }
+#social a.fa       { background-color: rgba(59,89,152,0.35);   background-image: url(https://tileman-io.vercel.app/tileman.io/fb.png);      padding-left: 26px; }
 #social a.fa:hover       { background-color: rgba(59,89,152,0.7);   border-color: rgba(59,89,152,0.5); }
-#social a.dis-link { background-color: rgba(114,137,218,0.35); background-image: url(/discord.png); padding-left: 26px; }
+#social a.dis-link { background-color: rgba(114,137,218,0.35); background-image: url(https://tileman-io.vercel.app/tileman.io/discord.png); padding-left: 26px; }
 #social a.dis-link:hover { background-color: rgba(114,137,218,0.7); border-color: rgba(114,137,218,0.5); }
-#social a.red-link { background-color: rgba(255,69,0,0.35);    background-image: url(/re.png);      padding-left: 26px; }
+#social a.red-link { background-color: rgba(255,69,0,0.35);    background-image: url(https://tileman-io.vercel.app/tileman.io/re.png);      padding-left: 26px; }
 #social a.red-link:hover { background-color: rgba(255,69,0,0.7);    border-color: rgba(255,69,0,0.5); }
 
 /* ===== REGION BUTTONS ===== */

@@ -426,7 +426,7 @@ a.lb:target + div.lb { display: block; }
 }
 #play:active { transform: translateY(0px); }
 #play.loading::after {
-  background-image: url(/loading.gif);
+  background-image: url(https://tileman-io.vercel.app/tileman.io/loading.gif);
   background-size: 1em 1em;
   background-position: center;
   background-repeat: no-repeat;

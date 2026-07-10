@@ -187,10 +187,10 @@
 			text-align: left;
 		}
 
-		/* Modern, Boundary-Safe Responsive Color favorites grid (11 Columns) */
+		/* Modern, Non-Collapsing Color favorites grid (Exactly 11 Columns) */
 		#colors {
 			display: grid;
-			grid-template-columns: repeat(11, minmax(0, 1fr)); /* Exactly 11 columns */
+			grid-template-columns: repeat(11, minmax(0, 1fr)); /* Force exactly 11 columns */
 			gap: 4px;
 			margin: 12px 0 6px;
 			width: 100%;
@@ -200,8 +200,8 @@
 			display: none !important; /* Ignore legacy hardcoded line breaks */
 		}
 		.colorbox {
-			aspect-ratio: 1;
 			width: 100%;
+			height: 38px; /* Fixed height guarantees the boxes will never collapse */
 			border-radius: 3px;
 			border: 1px solid rgba(0,0,0,0.3);
 			cursor: pointer;

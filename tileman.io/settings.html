@@ -189,13 +189,24 @@
 
 		/* Modern, Non-Collapsing Color favorites grid (Exactly 11 Columns) */
 		#colors {
-			display: grid !important; /* Forces the grid to show, bypassing style.css locks */
-			grid-template-columns: repeat(11, minmax(0, 1fr)) !important;
+			display: grid !important; /* Force grid layout */
+			grid-template-columns: repeat(11, minmax(0, 1fr)) !important; /* Strictly 11 columns */
+			columns: auto !important; /* Bypasses style.css multi-column overrides */
 			gap: 4px !important;
 			margin: 12px 0 6px !important;
 			width: 100% !important;
 			box-sizing: border-box !important;
 		}
+		
+		/* Disable legacy media queries completely */
+		@media (max-width: 950px), (max-width: 600px), (max-width: 400px) {
+			#colors {
+				display: grid !important;
+				grid-template-columns: repeat(11, minmax(0, 1fr)) !important;
+				columns: auto !important;
+			}
+		}
+
 		#colors br {
 			display: none !important; /* Ignore legacy hardcoded line breaks */
 		}

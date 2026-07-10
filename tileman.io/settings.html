@@ -189,12 +189,12 @@
 
 		/* Modern, Non-Collapsing Color favorites grid (Exactly 11 Columns) */
 		#colors {
-			display: grid;
-			grid-template-columns: repeat(11, minmax(0, 1fr)); /* Force exactly 11 columns */
-			gap: 4px;
-			margin: 12px 0 6px;
-			width: 100%;
-			box-sizing: border-box;
+			display: grid !important; /* Forces the grid to show, bypassing style.css locks */
+			grid-template-columns: repeat(11, minmax(0, 1fr)) !important;
+			gap: 4px !important;
+			margin: 12px 0 6px !important;
+			width: 100% !important;
+			box-sizing: border-box !important;
 		}
 		#colors br {
 			display: none !important; /* Ignore legacy hardcoded line breaks */

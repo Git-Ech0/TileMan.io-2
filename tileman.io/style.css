@@ -43,6 +43,90 @@
 *, *::before, *::after { box-sizing: border-box; }
 html { width: 100%; }
 
+/* ===== VISUAL THEME PRESETS ===== */
+body.theme-cyberpunk {
+  --bg-base:        #030008;
+  --bg-surface:     #0c001a;
+  --bg-card:        #120026;
+  --bg-card-hover:  #1e003c;
+  --red:            #00f0ff; /* Neon cyan override */
+  --red-hot:        #00ffff;
+  --orange:         #ff007f; /* Cyber neon pink */
+  --orange-light:   #ff55aa;
+  --text-primary:   #e0f7fc;
+  --border:         rgba(0,240,255,0.12);
+  --border-strong:  rgba(0,240,255,0.25);
+  --shadow-red:     0 0 28px rgba(0,240,255,0.45);
+  --shadow-orange:  0 0 24px rgba(255,0,127,0.4);
+}
+body.theme-cyberpunk::before {
+  background-image:
+    linear-gradient(rgba(0,240,255,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,240,255,0.04) 1px, transparent 1px);
+}
+
+body.theme-space {
+  --bg-base:        #020208;
+  --bg-surface:     #070814;
+  --bg-card:        #0e1124;
+  --bg-card-hover:  #161b36;
+  --red:            #8a2be2; /* Cosmic violet */
+  --red-hot:        #a04ef6;
+  --border:         rgba(138,43,226,0.15);
+  --border-strong:  rgba(138,43,226,0.3);
+  --shadow-red:     0 0 24px rgba(138,43,226,0.5);
+}
+
+body.theme-retro {
+  --bg-base:        #0a0f0d;
+  --bg-surface:     #121a16;
+  --bg-card:        #18241e;
+  --bg-card-hover:  #22332a;
+  --red:            #39ff14; /* Matrix bright green */
+  --red-hot:        #79ff5c;
+  --orange:         #33ff33;
+  --text-primary:   #aaffaa;
+  --text-secondary: #66aa66;
+  --text-dim:       #447744;
+  --border:         rgba(57,255,20,0.15);
+  --border-strong:  rgba(57,255,20,0.3);
+  --shadow-red:     0 0 20px rgba(57,255,20,0.45);
+  --font-body:      var(--font-mono);
+  --font-display:   var(--font-mono);
+}
+
+body.theme-light {
+  --bg-base:        #f3f4f6;
+  --bg-surface:     #ffffff;
+  --bg-card:        #f9fafb;
+  --bg-card-hover:  #f3f4f6;
+  --text-primary:   #111827;
+  --text-secondary: #4b5563;
+  --text-dim:       #9ca3af;
+  --red:            #ff4757;
+  --red-hot:        #ff6b81;
+  --border:         rgba(0,0,0,0.06);
+  --border-strong:  rgba(0,0,0,0.12);
+  --shadow-red:     0 8px 24px rgba(255,71,87,0.18);
+}
+body.theme-light::before {
+  background-image:
+    linear-gradient(rgba(0,0,0,0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,0.02) 1px, transparent 1px);
+}
+
+body.theme-slate {
+  --bg-base:        #0c0f12;
+  --bg-surface:     #12161b;
+  --bg-card:        #191e24;
+  --bg-card-hover:  #20262e;
+  --red:            #f39c12; /* Warm amber */
+  --red-hot:        #f1c40f;
+  --border:         rgba(255,255,255,0.05);
+  --border-strong:  rgba(255,255,255,0.09);
+  --shadow-red:     0 0 18px rgba(243,156,18,0.25);
+}
+
 /* ===== BODY ===== */
 body {
   background-color: var(--bg-base);

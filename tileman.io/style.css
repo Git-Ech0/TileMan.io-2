@@ -34,8 +34,8 @@
   --shadow-red:     0 0 24px rgba(232,25,44,0.45);
   --shadow-orange:  0 0 18px rgba(255,85,0,0.4);
   --shadow-blue:    0 0 18px rgba(30,111,255,0.35);
-  --font-display:   'Rajdhani', 'Arial Black', sans-serif;
-  --font-body:      'Inter', 'Arial', sans-serif;
+  --font-display:   'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono:      'JetBrains Mono', 'Courier New', monospace;
 }
 
@@ -188,7 +188,7 @@ h1 {
   font-weight: 700;
   font-size: 5em;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
+  text-transform: none;
   margin: 0.15em 0;
   color: var(--text-primary);
   text-shadow:
@@ -203,7 +203,7 @@ h2 {
   font-weight: 600;
   font-size: 1.7em;
   letter-spacing: 0.06em;
-  text-transform: uppercase;
+  text-transform: none;
   color: var(--text-primary);
   padding-left: 12px;
   margin: 1.2em 0 0.6em;
@@ -214,7 +214,7 @@ h3 {
   font-weight: 600;
   font-size: 0.9em;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
+  text-transform: none;
   color: var(--text-secondary);
   margin: 0.5em 0;
 }
@@ -224,7 +224,7 @@ h4 {
   font-weight: 500;
   font-size: 0.8em;
   letter-spacing: 0.07em;
-  text-transform: uppercase;
+  text-transform: none;
   color: var(--text-dim);
   margin: 0.4em 0;
 }
@@ -251,7 +251,7 @@ th {
   font-family: var(--font-display);
   font-weight: 600;
   letter-spacing: 0.06em;
-  text-transform: uppercase;
+  text-transform: none;
   font-size: 0.8em;
   color: var(--text-secondary);
 }
@@ -374,7 +374,7 @@ a.lb:target + div.lb { display: block; }
   font-size: 0.78em;
   font-weight: 600;
   letter-spacing: 0.07em;
-  text-transform: uppercase;
+  text-transform: none;
   padding: 5px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -423,7 +423,7 @@ a.lb:target + div.lb { display: block; }
   font-weight: 600;
   font-size: 0.82em;
   letter-spacing: 0.07em;
-  text-transform: uppercase;
+  text-transform: none;
   padding: 8px 16px;
   margin: 4px 3px;
   border-radius: var(--radius-sm);
@@ -453,7 +453,7 @@ a.lb:target + div.lb { display: block; }
   font-weight: 600;
   font-size: 0.82em;
   letter-spacing: 0.07em;
-  text-transform: uppercase;
+  text-transform: none;
   padding: 8px 16px;
   margin: 4px 3px;
   border-radius: var(--radius-sm);
@@ -483,7 +483,7 @@ a.lb:target + div.lb { display: block; }
   font-weight: 700;
   font-size: 2.6em;
   letter-spacing: 0.12em;
-  text-transform: uppercase;
+  text-transform: none;
   width: 5.2em;
   padding: 14px 0;
   border-radius: var(--radius-md);
@@ -613,7 +613,7 @@ button:hover {
   font-size: 1.15em;
   font-weight: 700;
   letter-spacing: 0.07em;
-  text-transform: uppercase;
+  text-transform: none;
   margin: 12px 6px;
   padding: 12px 28px;
   border-radius: var(--radius-sm);
@@ -635,7 +635,7 @@ button:hover {
   font-family: var(--font-display);
   font-weight: 600;
   letter-spacing: 0.06em;
-  text-transform: uppercase;
+  text-transform: none;
   font-size: 0.82em;
   padding: 8px 16px;
   border-radius: var(--radius-sm);
@@ -919,7 +919,7 @@ html:not(.crazy) #crazy { display: none; }
   font-weight: 600;
   font-size: 0.8em;
   letter-spacing: 0.07em;
-  text-transform: uppercase;
+  text-transform: none;
   color: var(--text-secondary);
   border: 1px solid var(--border);
   border-radius: 30px;

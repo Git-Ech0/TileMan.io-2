@@ -999,6 +999,8 @@ body.spectating-active #game {
 
 .p2p-header {
   flex: 0 0 auto;
+  cursor: move;
+  touch-action: none;
   background: rgba(22, 22, 37, 0.9);
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-strong);

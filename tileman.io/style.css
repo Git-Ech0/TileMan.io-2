@@ -978,7 +978,6 @@ input[type=button]:hover {
   transition: all 0.3s ease;
 }
 
-/* Hide interface panels when spectating a live peer to keep rendering clean */
 body.spectating-active #p2p-panel,
 body.spectating-active #intro,
 body.spectating-active #game {
@@ -997,12 +996,6 @@ body.spectating-active #game {
   display: flex;
   justify-content: space-between;
   align-items: center;
-}
-
-.p2p-slot-tag {
-  font-size: 0.85em;
-  color: var(--red-hot, #FF2E42);
-  text-shadow: 0 0 8px rgba(232, 25, 44, 0.4);
 }
 
 #p2p-list {
@@ -1081,11 +1074,11 @@ body.spectating-active #game {
 
 .p2p-btn.active:hover {
   background: var(--red, #E8192C);
-  color: #white;
+  color: white;
   box-shadow: var(--shadow-red);
 }
 
-/* ===== FULL-SCREEN SPECTATOR STYLES ===== */
+/* ===== SPECTOR SCREEN OVERLAY ===== */
 #spectator-overlay {
   position: fixed;
   inset: 0;

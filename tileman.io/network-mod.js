@@ -80,15 +80,28 @@ import { joinRoom } from 'https://esm.run/trystero';
         region: state.region || 'Default',
         mode: state.mode || 'Default',
         isPlaying: !!state.isPlaying,
+        allowSpectating: state.allowSpectating !== false,
         lastSeen: Date.now()
       });
       updateUI();
     };
 
     subscribeAction.onMessage = (_, { peerId }) => {
+      if (window.TamState?.allowSpectating === false) return; // Reject incoming viewer
       activeSpectators.add(peerId);
       handleStreamingService();
     };
+
+    window.addEventListener('spectateSettingChanged', (e) => {
+      const isAllowed = e.detail;
+      broadcastState();
+      
+      if (!isAllowed) {
+        // Kick anyone currently watching if toggled off mid-match
+        activeSpectators.clear();
+        handleStreamingService();
+      }
+    });
 
     unsubscribeAction.onMessage = (_, { peerId }) => {
       activeSpectators.delete(peerId);
@@ -115,7 +128,8 @@ import { joinRoom } from 'https://esm.run/trystero';
       username: window.TamState?.getSelfName() || localStorage['n'] || 'Player',
       region: window.TamState?.selectedRegion || 'Default',
       mode: window.TamState?.selectedMode || 'Default',
-      isPlaying: !!(window.TamState?.isGameActive)
+      isPlaying: !!(window.TamState?.isGameActive),
+      allowSpectating: window.TamState?.allowSpectating !== false
     };
   }
 
@@ -200,13 +214,18 @@ import { joinRoom } from 'https://esm.run/trystero';
         btn.className += ' active';
         btn.onclick = exitSpectatorView;
       } else {
-        btn.textContent = 'SPECTATE';
-        if (!data.isPlaying) {
+        if (!data.allowSpectating) {
+          btn.textContent = 'DISABLED';
           btn.disabled = true;
-          btn.style.opacity = '0.4';
-          btn.style.cursor = 'not-allowed';
         } else {
-          btn.onclick = () => startSpectating(peerId);
+          btn.textContent = 'SPECTATE';
+          if (!data.isPlaying) {
+            btn.disabled = true;
+            btn.style.opacity = '0.4';
+            btn.style.cursor = 'not-allowed';
+          } else {
+            btn.onclick = () => startSpectating(peerId);
+          }
         }
       }
 

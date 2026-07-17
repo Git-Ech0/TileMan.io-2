@@ -1,45 +1,36 @@
 /**
  * TileMan.io Cross-Server Spectator Mod
- * Handles P2P stream state with rate-limiting, staggered connections, and slot backoffs
+ * Handles P2P stream state against static index.html and style.css components
  */
 
 (function () {
   const SLOT_PREFIX = 'tileman-slot-';
-  const MAX_SLOTS = 20;               
-  const SCAN_INTERVAL_MS = 2000;      // Relaxed scanning interval to reduce signaling overhead
-  const BROADCAST_FPS = 30;           
-  
-  const STALE_ACTIVE_TIMEOUT_MS = 5000;    
-  const STALE_BACKGROUND_TIMEOUT_MS = 120000; 
+  const MAX_SLOTS = 20;               // Maximum slots increased to 20
+  const SCAN_INTERVAL_MS = 1500;      // Accelerated scan interval to check dead channels
+  const BROADCAST_FPS = 30;           // Optimized frame-rate targets 30 FPS
+  const STALE_PEER_TIMEOUT_MS = 4500;  // Quicker stale peer timeouts to avoid ghost connections
 
   let mySlotId = null;
   let peer = null;
-  let isRebuilding = false;
-  let isScanning = false;
-  let isTabActive = true;
-
-  const activeConnections = new Map(); // slotNumber -> DataConnection
-  const playerRegistry = new Map();    // slotNumber -> { username, region, mode, isPlaying, status, lastSeen }
+  const activeConnections = new Map(); 
+  const playerRegistry = new Map();    
   const activeSpectators = new Set();  
   let spectatingSlot = null;           
   let broadcastTimer = null;           
 
+  // Rescaling offscreen context canvas to avoid DataChannel UDP bottlenecks
   const scaleCanvas = document.createElement('canvas');
   const scaleCtx = scaleCanvas.getContext('2d');
   const TARGET_STREAM_WIDTH = 600; 
 
   function initializeMod() {
-    isRebuilding = false;
     const slotsToTry = Array.from({ length: MAX_SLOTS }, (_, i) => i + 1)
       .sort(() => Math.random() - 0.5);
 
     function attemptNextSlot(list) {
       if (list.length === 0) {
         const msg = document.querySelector('.p2p-status-message');
-        if (msg) msg.textContent = 'All spectator slots occupied. Retrying in 10s...';
-        
-        // Wait 10 seconds before starting a new search cycle to avoid rate-limiting
-        setTimeout(initializeMod, 10000);
+        if (msg) msg.textContent = 'All spectator slots are currently occupied.';
         return;
       }
 
@@ -65,15 +56,9 @@
       tempPeer.on('error', (err) => {
         if (err.type === 'unavailable-id') {
           tempPeer.destroy();
-          // 500ms delay before attempting the next slot to prevent spamming
-          setTimeout(() => attemptNextSlot(list), 500);
-        } else if (err.type === 'network' || err.type === 'socket-error') {
-          tempPeer.destroy();
-          // Server might be busy; back off for 1 second
-          setTimeout(() => attemptNextSlot(list), 1000);
+          attemptNextSlot(list);
         } else {
-          tempPeer.destroy();
-          setTimeout(() => attemptNextSlot(list), 500);
+          console.error(`P2P registry lookup error:`, err);
         }
       });
     }
@@ -86,39 +71,14 @@
       const match = conn.peer.match(/tileman-slot-(\d+)/);
       if (match) {
         const remoteSlot = parseInt(match[1], 10);
-        
-        if (activeConnections.has(remoteSlot)) {
-          const existing = activeConnections.get(remoteSlot);
-          if (existing.open) {
-            conn.close();
-            return;
-          }
-        }
         setupConnectionHandlers(conn, remoteSlot);
       }
     });
 
-    // Attempt signaling socket reconnect, leaving active WebRTC channels open
+    // Handle signaling server disconnects cleanly
     peer.on('disconnected', () => {
-      console.warn('Signaling server link lost. Reconnecting socket in 5s...');
-      setTimeout(() => {
-        if (peer && peer.disconnected && !peer.destroyed) {
-          peer.reconnect();
-        }
-      }, 5000); // 5-second delay to avoid connection loops
-    });
-
-    peer.on('error', (err) => {
-      // Normal behavior: ignore unsuccessful connections to empty slots
-      if (err.type === 'peer-unavailable') {
-        return;
-      }
-      
-      if (err.type === 'unavailable-id') {
-        return;
-      }
-
-      console.warn(`PeerJS non-fatal error: ${err.type}`);
+      console.warn('Disconnected from signaling server. Attempting reconnect...');
+      peer.reconnect();
     });
 
     setInterval(scanNetworkMesh, SCAN_INTERVAL_MS);
@@ -129,98 +89,35 @@
       closeBtn.onclick = exitSpectatorView;
     }
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
     updateUI();
   }
 
-  function handleVisibilityChange() {
-    isTabActive = (document.visibilityState === 'visible');
-    
-    if (isTabActive) {
-      if (!peer || peer.destroyed) {
-        rebuildEntirePeerInstance();
-        return;
-      }
-      if (peer.disconnected) {
-        peer.reconnect();
-      }
-
-      broadcastPresence();
-      scanNetworkMesh();
-    } else {
-      broadcastPresence();
-      handleStreamingService();
-    }
-    updateUI();
-  }
-
-  function broadcastPresence() {
-    activeConnections.forEach((conn) => {
-      if (conn.open) {
-        sendStatePing(conn);
-      }
-    });
-  }
-
-  function rebuildEntirePeerInstance() {
-    if (isRebuilding) return;
-    isRebuilding = true;
-    console.log('Teardown active. Rebuilding mesh instance...');
-    
-    activeConnections.forEach((conn) => {
-      try { conn.close(); } catch (e) {}
-    });
-    
-    activeConnections.clear();
-    playerRegistry.clear();
-    activeSpectators.clear();
-    
-    if (spectatingSlot !== null) {
-      exitSpectatorView();
-    }
-
-    if (peer) {
-      try { peer.destroy(); } catch (e) {}
-      peer = null;
-    }
-
-    setTimeout(initializeMod, 2000); // 2-second delay on full rebuild to let sockets clean up
-  }
-
-  // Staggered connection scanner to avoid rate-limiting limits on free servers
-  async function scanNetworkMesh() {
-    if (!peer || peer.destroyed || peer.disconnected || isScanning) return;
-    isScanning = true;
+  function scanNetworkMesh() {
+    if (!peer || peer.destroyed) return;
 
     for (let s = 1; s <= MAX_SLOTS; s++) {
       if (s === mySlotId) continue;
 
       const connectionActive = activeConnections.has(s);
-      
       if (connectionActive) {
         const conn = activeConnections.get(s);
-        if (conn && conn.open) {
+        if (conn.open) {
           sendStatePing(conn);
         } else {
+          // Tear down broken connections immediately so the next pass can reconstruct
           activeConnections.delete(s);
         }
-      } else {
-        if (mySlotId < s) {
-          connectToPeer(s);
-          // Wait 300ms before attempting the next connection to avoid server socket throttling
-          await new Promise((resolve) => setTimeout(resolve, 300));
-        }
+      } else if (mySlotId < s) {
+        connectToPeer(s);
       }
     }
-    isScanning = false;
   }
 
   function connectToPeer(targetSlot) {
     const targetPeerId = `${SLOT_PREFIX}${targetSlot}`;
     const conn = peer.connect(targetPeerId, { 
       serialization: 'json',
-      reliable: false 
+      reliable: false // Setting reliable to false utilizes UDP pathways directly for faster streaming
     });
     setupConnectionHandlers(conn, targetSlot);
   }
@@ -241,7 +138,6 @@
             region: payload.region || 'Default',
             mode: payload.mode || 'Default',
             isPlaying: !!payload.isPlaying,
-            status: payload.status || 'ACTIVE',
             lastSeen: Date.now()
           });
           updateUI();
@@ -287,8 +183,7 @@
       username: window.TamState?.getSelfName() || localStorage['n'] || 'Player',
       region: window.TamState?.selectedRegion || 'Default',
       mode: window.TamState?.selectedMode || 'Default',
-      isPlaying: !!(window.TamState?.isGameActive),
-      status: isTabActive ? 'ACTIVE' : 'BACKGROUND'
+      isPlaying: !!(window.TamState?.isGameActive)
     };
     if (conn.open) {
       conn.send(state);
@@ -297,7 +192,7 @@
 
   function handleStreamingService() {
     const activeMatch = window.TamState?.isGameActive;
-    const shouldStream = activeSpectators.size > 0 && activeMatch && isTabActive;
+    const shouldStream = activeSpectators.size > 0 && activeMatch;
 
     if (shouldStream && !broadcastTimer) {
       const interval = Math.round(1000 / BROADCAST_FPS);
@@ -310,7 +205,7 @@
 
   function captureAndDistributeFrame() {
     const canvas = document.getElementById('canvas');
-    if (!canvas || !window.TamState?.isGameActive || !isTabActive) {
+    if (!canvas || !window.TamState?.isGameActive) {
       handleStreamingService();
       return;
     }
@@ -320,6 +215,7 @@
       const ratio = TARGET_STREAM_WIDTH / canvas.width;
 
       if (ratio < 1) {
+        // Resize canvas before sending to reduce bandwidth footprint and sustain 30 FPS
         scaleCanvas.width = TARGET_STREAM_WIDTH;
         scaleCanvas.height = canvas.height * ratio;
         scaleCtx.drawImage(canvas, 0, 0, scaleCanvas.width, scaleCanvas.height);
@@ -346,11 +242,7 @@
     let change = false;
 
     playerRegistry.forEach((data, slotNum) => {
-      const allowedIdleTime = (data.status === 'BACKGROUND') 
-        ? STALE_BACKGROUND_TIMEOUT_MS 
-        : STALE_ACTIVE_TIMEOUT_MS;
-
-      if (now - data.lastSeen > allowedIdleTime) {
+      if (now - data.lastSeen > STALE_PEER_TIMEOUT_MS) {
         playerRegistry.delete(slotNum);
         activeConnections.delete(slotNum);
         activeSpectators.delete(slotNum);
@@ -378,19 +270,9 @@
 
       const meta = document.createElement('div');
       meta.className = 'p2p-meta';
-      
-      let statusTag = '';
-      if (data.status === 'BACKGROUND') {
-        statusTag = '<span style="color:#ffaa00;">Idle</span>';
-      } else if (data.isPlaying) {
-        statusTag = '<span style="color:#6fffa0;">Match</span>';
-      } else {
-        statusTag = '<span style="color:#888;">Lobby</span>';
-      }
-
       meta.innerHTML = `
         <div class="p2p-name" title="${data.username}">${data.username}</div>
-        <div class="p2p-info">${data.region} • ${data.mode} • ${statusTag}</div>
+        <div class="p2p-info">${data.region} • ${data.mode} • ${data.isPlaying ? '<span style="color:#6fffa0;">Match</span>' : '<span style="color:#888;">Lobby</span>'}</div>
       `;
 
       const btn = document.createElement('button');
@@ -403,7 +285,7 @@
         btn.onclick = exitSpectatorView;
       } else {
         btn.textContent = 'SPECTATE';
-        if (!data.isPlaying || data.status === 'BACKGROUND') {
+        if (!data.isPlaying) {
           btn.disabled = true;
           btn.style.opacity = '0.4';
           btn.style.cursor = 'not-allowed';

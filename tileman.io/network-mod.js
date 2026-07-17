@@ -13,6 +13,7 @@
   let mySlotId = null;
   let peer = null;
   const activeConnections = new Map(); 
+  const connectingSlots = new Set();   // Tracks in-flight outbound connection attempts
   const playerRegistry = new Map();    
   const activeSpectators = new Set();  
   let spectatingSlot = null;           
@@ -107,13 +108,14 @@
           // Tear down broken connections immediately so the next pass can reconstruct
           activeConnections.delete(s);
         }
-      } else if (mySlotId < s) {
+      } else if (mySlotId < s && !connectingSlots.has(s)) {
         connectToPeer(s);
       }
     }
   }
 
   function connectToPeer(targetSlot) {
+    connectingSlots.add(targetSlot);
     const targetPeerId = `${SLOT_PREFIX}${targetSlot}`;
     const conn = peer.connect(targetPeerId, { 
       serialization: 'json',
@@ -124,6 +126,7 @@
 
   function setupConnectionHandlers(conn, slotNum) {
     conn.on('open', () => {
+      connectingSlots.delete(slotNum);
       activeConnections.set(slotNum, conn);
       sendStatePing(conn);
     });
@@ -163,6 +166,7 @@
     });
 
     const cleanup = () => {
+      connectingSlots.delete(slotNum);
       activeConnections.delete(slotNum);
       playerRegistry.delete(slotNum);
       activeSpectators.delete(slotNum);
@@ -243,6 +247,9 @@
 
     playerRegistry.forEach((data, slotNum) => {
       if (now - data.lastSeen > STALE_PEER_TIMEOUT_MS) {
+        const staleConn = activeConnections.get(slotNum);
+        if (staleConn && staleConn.open) staleConn.close();
+        connectingSlots.delete(slotNum);
         playerRegistry.delete(slotNum);
         activeConnections.delete(slotNum);
         activeSpectators.delete(slotNum);
@@ -327,7 +334,7 @@
     if (overlay) overlay.style.display = 'none';
     
     const view = document.getElementById('spectator-render-view');
-    if (view) view.src = '';
+    if (view) view.removeAttribute('src');
     
     document.body.classList.remove('spectating-active');
     updateUI();

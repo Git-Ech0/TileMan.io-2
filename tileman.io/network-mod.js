@@ -1,27 +1,27 @@
 /**
  * TileMan.io Cross-Server Spectator Mod
- * Robust Symmetric P2P Mesh with Active/Background Presence Tracking
+ * Handles P2P stream state with rate-limiting, staggered connections, and slot backoffs
  */
 
 (function () {
   const SLOT_PREFIX = 'tileman-slot-';
   const MAX_SLOTS = 20;               
-  const SCAN_INTERVAL_MS = 1500;      
+  const SCAN_INTERVAL_MS = 2000;      // Relaxed scanning interval to reduce signaling overhead
   const BROADCAST_FPS = 30;           
   
-  // Custom presence timeouts to prevent background eviction
-  const STALE_ACTIVE_TIMEOUT_MS = 5000;    // Evict active peers after 5s of silence
-  const STALE_BACKGROUND_TIMEOUT_MS = 120000; // Keep background peers alive for 2 minutes
+  const STALE_ACTIVE_TIMEOUT_MS = 5000;    
+  const STALE_BACKGROUND_TIMEOUT_MS = 120000; 
 
   let mySlotId = null;
   let peer = null;
   let isRebuilding = false;
+  let isScanning = false;
   let isTabActive = true;
 
   const activeConnections = new Map(); // slotNumber -> DataConnection
   const playerRegistry = new Map();    // slotNumber -> { username, region, mode, isPlaying, status, lastSeen }
-  const activeSpectators = new Set();  // Set of slotNumbers spectating us
-  let spectatingSlot = null;           // Slot we are currently spectating
+  const activeSpectators = new Set();  
+  let spectatingSlot = null;           
   let broadcastTimer = null;           
 
   const scaleCanvas = document.createElement('canvas');
@@ -36,7 +36,10 @@
     function attemptNextSlot(list) {
       if (list.length === 0) {
         const msg = document.querySelector('.p2p-status-message');
-        if (msg) msg.textContent = 'All spectator slots are currently occupied.';
+        if (msg) msg.textContent = 'All spectator slots occupied. Retrying in 10s...';
+        
+        // Wait 10 seconds before starting a new search cycle to avoid rate-limiting
+        setTimeout(initializeMod, 10000);
         return;
       }
 
@@ -62,12 +65,15 @@
       tempPeer.on('error', (err) => {
         if (err.type === 'unavailable-id') {
           tempPeer.destroy();
-          attemptNextSlot(list);
+          // 500ms delay before attempting the next slot to prevent spamming
+          setTimeout(() => attemptNextSlot(list), 500);
         } else if (err.type === 'network' || err.type === 'socket-error') {
           tempPeer.destroy();
-          attemptNextSlot(list);
+          // Server might be busy; back off for 1 second
+          setTimeout(() => attemptNextSlot(list), 1000);
         } else {
-          console.error(`P2P registry lookup error:`, err);
+          tempPeer.destroy();
+          setTimeout(() => attemptNextSlot(list), 500);
         }
       });
     }
@@ -81,11 +87,9 @@
       if (match) {
         const remoteSlot = parseInt(match[1], 10);
         
-        // Strict Deduplication Rule: If we already have an active open channel, reject incoming duplicates
         if (activeConnections.has(remoteSlot)) {
           const existing = activeConnections.get(remoteSlot);
           if (existing.open) {
-            console.log(`Rejecting redundant duplicate channel from Slot ${remoteSlot}`);
             conn.close();
             return;
           }
@@ -94,25 +98,37 @@
       }
     });
 
+    // Attempt signaling socket reconnect, leaving active WebRTC channels open
     peer.on('disconnected', () => {
-      console.warn('Signaling link broken. Attempting silent recovery...');
-      peer.reconnect();
+      console.warn('Signaling server link lost. Reconnecting socket in 5s...');
+      setTimeout(() => {
+        if (peer && peer.disconnected && !peer.destroyed) {
+          peer.reconnect();
+        }
+      }, 5000); // 5-second delay to avoid connection loops
     });
 
     peer.on('error', (err) => {
-      console.error(`Fatal Peer Error: ${err.type}. Initiating mesh rebuild...`);
-      rebuildEntirePeerInstance();
+      // Normal behavior: ignore unsuccessful connections to empty slots
+      if (err.type === 'peer-unavailable') {
+        return;
+      }
+      
+      if (err.type === 'unavailable-id') {
+        return;
+      }
+
+      console.warn(`PeerJS non-fatal error: ${err.type}`);
     });
 
     setInterval(scanNetworkMesh, SCAN_INTERVAL_MS);
-    setInterval(evictDeadNodes, 2000);
+    setInterval(evictDeadNodes, 2500);
 
     const closeBtn = document.getElementById('spectator-close-btn');
     if (closeBtn) {
       closeBtn.onclick = exitSpectatorView;
     }
 
-    // Capture focus change events to set presence
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     updateUI();
@@ -122,9 +138,6 @@
     isTabActive = (document.visibilityState === 'visible');
     
     if (isTabActive) {
-      console.log('Tab focused. Restoring presence...');
-      
-      // Force connection recovery if peer object dropped
       if (!peer || peer.destroyed) {
         rebuildEntirePeerInstance();
         return;
@@ -133,14 +146,10 @@
         peer.reconnect();
       }
 
-      // Immediately notify peers we are active again
       broadcastPresence();
       scanNetworkMesh();
     } else {
-      console.log('Tab backgrounded. Suspending feed to conserve CPU...');
-      // Notify peers we are backgrounded before throttling takes effect
       broadcastPresence();
-      // Halt local outbound stream to save background CPU
       handleStreamingService();
     }
     updateUI();
@@ -157,7 +166,7 @@
   function rebuildEntirePeerInstance() {
     if (isRebuilding) return;
     isRebuilding = true;
-    console.log('Teardown active. Re-establishing clean mesh node...');
+    console.log('Teardown active. Rebuilding mesh instance...');
     
     activeConnections.forEach((conn) => {
       try { conn.close(); } catch (e) {}
@@ -176,11 +185,13 @@
       peer = null;
     }
 
-    setTimeout(initializeMod, 1000);
+    setTimeout(initializeMod, 2000); // 2-second delay on full rebuild to let sockets clean up
   }
 
-  function scanNetworkMesh() {
-    if (!peer || peer.destroyed || peer.disconnected) return;
+  // Staggered connection scanner to avoid rate-limiting limits on free servers
+  async function scanNetworkMesh() {
+    if (!peer || peer.destroyed || peer.disconnected || isScanning) return;
+    isScanning = true;
 
     for (let s = 1; s <= MAX_SLOTS; s++) {
       if (s === mySlotId) continue;
@@ -195,12 +206,14 @@
           activeConnections.delete(s);
         }
       } else {
-        // Strict Asymmetric Rule: Only initiate connections to higher slot IDs
         if (mySlotId < s) {
           connectToPeer(s);
+          // Wait 300ms before attempting the next connection to avoid server socket throttling
+          await new Promise((resolve) => setTimeout(resolve, 300));
         }
       }
     }
+    isScanning = false;
   }
 
   function connectToPeer(targetSlot) {
@@ -228,7 +241,7 @@
             region: payload.region || 'Default',
             mode: payload.mode || 'Default',
             isPlaying: !!payload.isPlaying,
-            status: payload.status || 'ACTIVE', // Track background vs active status
+            status: payload.status || 'ACTIVE',
             lastSeen: Date.now()
           });
           updateUI();
@@ -284,7 +297,6 @@
 
   function handleStreamingService() {
     const activeMatch = window.TamState?.isGameActive;
-    // Halt outgoing frames if tab is backgrounded
     const shouldStream = activeSpectators.size > 0 && activeMatch && isTabActive;
 
     if (shouldStream && !broadcastTimer) {
@@ -334,7 +346,6 @@
     let change = false;
 
     playerRegistry.forEach((data, slotNum) => {
-      // Background peers receive an extended timeout window
       const allowedIdleTime = (data.status === 'BACKGROUND') 
         ? STALE_BACKGROUND_TIMEOUT_MS 
         : STALE_ACTIVE_TIMEOUT_MS;
@@ -368,7 +379,6 @@
       const meta = document.createElement('div');
       meta.className = 'p2p-meta';
       
-      // Visual state tag based on active vs background status
       let statusTag = '';
       if (data.status === 'BACKGROUND') {
         statusTag = '<span style="color:#ffaa00;">Idle</span>';
@@ -393,7 +403,6 @@
         btn.onclick = exitSpectatorView;
       } else {
         btn.textContent = 'SPECTATE';
-        // Allow spectating only if the peer is actively in a match and is not currently in background state
         if (!data.isPlaying || data.status === 'BACKGROUND') {
           btn.disabled = true;
           btn.style.opacity = '0.4';

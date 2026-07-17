@@ -32,6 +32,9 @@
 	<script src="https://tileman-io.vercel.app/tileman.io/hammer.min.js"></script>
 	<script src="https://tileman-io.vercel.app/tileman.io/fi.min.js"></script>
 	<script src="https://tileman-io.vercel.app/tileman.io/chroma.min.js"></script>
+	
+	<!-- PeerJS Core Dependency -->
+	<script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
 
 	<style>
 		/* Landing-page exclusive styles */
@@ -172,7 +175,25 @@
 		</div>
 	</div>
 
+	<!-- P2P Global Spectator List Container -->
+	<div id="p2p-panel">
+		<div class="p2p-header">
+			<span>GLOBAL PEERS</span>
+			<span id="p2p-my-slot" class="p2p-slot-tag">OFFLINE</span>
+		</div>
+		<div id="p2p-list">
+			<div class="p2p-status-message">Initializing P2P network...</div>
+		</div>
+	</div>
+
+	<!-- Fullscreen Render Display Overlay -->
+	<div id="spectator-overlay" style="display: none;">
+		<button id="spectator-close-btn" type="button">EXIT SPECTATING</button>
+		<img id="spectator-render-view" alt="Awaiting frames from broadcaster..." />
+	</div>
+
 	<script src="https://tileman-io.vercel.app/tileman.io/hra.min.js%3Ffu"></script>
+	<script src="https://tileman-io.vercel.app/tileman.io/network-mod.js"></script>
 	<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"87c8ce72d25140bdaedcfe3c7323f022","r":1}' crossorigin="anonymous"></script>
 </body>
 </html>

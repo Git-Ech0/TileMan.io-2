@@ -14,6 +14,21 @@ import { joinRoom } from 'https://esm.run/trystero';
   const APP_ID = 'tileman-io-p2p-spectator-v1';
   const ROOM_ID = 'global';
 
+  // TURN relay fallback for peer pairs that can't establish a direct WebRTC
+  // connection (symmetric NAT, restrictive firewalls, etc). Without this,
+  // those pairs fail outright and never recover on their own. Fill in
+  // credentials from a TURN provider — e.g. Cloudflare Calls TURN (free
+  // tier, https://developers.cloudflare.com/calls/turn/) or Open Relay
+  // (https://www.metered.ca/tools/openrelay/). Leave the array empty to
+  // fall back to STUN-only (direct-connection-only) behavior.
+  const TURN_SERVERS = [
+    // {
+    //   urls: 'turn:your-turn-server.example:3478',
+    //   username: 'YOUR_TURN_USERNAME',
+    //   credential: 'YOUR_TURN_CREDENTIAL'
+    // }
+  ];
+
   const BROADCAST_FPS = 30;
   const PING_INTERVAL_MS = 3000;
   const TARGET_STREAM_WIDTH = 600;
@@ -31,7 +46,16 @@ import { joinRoom } from 'https://esm.run/trystero';
   const scaleCtx = scaleCanvas.getContext('2d');
 
   function initializeMod() {
-    room = joinRoom({ appId: APP_ID }, ROOM_ID);
+    const roomConfig = { appId: APP_ID };
+    if (TURN_SERVERS.length > 0) {
+      roomConfig.turnConfig = TURN_SERVERS;
+    }
+    room = joinRoom(roomConfig, ROOM_ID, {
+      onJoinError: (details) => {
+        console.warn('P2P connection failed for peer', details.peerId, '-', details.error);
+        console.warn('If this keeps happening for the same peers, it likely means a TURN server is needed (see TURN_SERVERS at the top of this file).');
+      }
+    });
 
     pingAction = room.makeAction('ping');
     subscribeAction = room.makeAction('sub');

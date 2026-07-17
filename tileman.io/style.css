@@ -756,6 +756,9 @@ button:hover {
 #player_stats, #performance_stats { white-space: nowrap; }
 #performance_stats .anim { opacity: 0; transition: opacity 1s; transition-delay: 5s; }
 .stat_name { display: inline-block; width: 3.75em; text-align: left; }
+/* "Spectators: " is wider than the 3.75em box the other short labels (Score, Tiles...)
+   fit inside, so it was overflowing its box and getting overlapped by the count that followed it. */
+#spectator-info .stat_name { display: inline-block; width: auto; text-align: left; margin-right: 0.3em; }
 #player_stats div > span + span { text-align: right; width: 8.5em; }
 #performance_stats div > span + span { min-width: 3em; }
 #player_name { overflow: hidden; white-space: nowrap; }
@@ -962,10 +965,14 @@ input[type=button]:hover {
    ============================================================ */
 
 #p2p-panel {
+  /* top/left/height are set by positionP2PPanel() in hra.min.js so the panel always sits
+     directly under the minimap and stops right above the stats card, on any screen size.
+     These are just sane fallback values before that first runs. */
   position: fixed;
-  top: 80px;
-  left: 15px;
-  width: 250px;
+  top: 120px;
+  left: 5px;
+  width: 150px;
+  max-height: 220px;
   background: rgba(15, 15, 26, 0.85);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -973,9 +980,12 @@ input[type=button]:hover {
   border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-family: var(--font-body);
-  z-index: 1000;
+  z-index: 20;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* header is pinned; only #p2p-list (below) scrolls */
+  transition: opacity 0.3s ease;
 }
 
 body.spectating-active #p2p-panel,
@@ -985,47 +995,52 @@ body.spectating-active #game {
 }
 
 .p2p-header {
+  flex: 0 0 auto;
   background: rgba(22, 22, 37, 0.9);
-  padding: 10px 14px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--border-strong);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 0.8em;
+  font-size: 0.7em;
   letter-spacing: 0.08em;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  text-transform: uppercase;
+  text-align: center;
 }
 
 #p2p-list {
-  max-height: 260px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  padding: 4px 0;
+  padding: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  /* scrollable, but no visible scrollbar */
+  scrollbar-width: none;     /* Firefox */
+  -ms-overflow-style: none;  /* legacy Edge/IE */
 }
+#p2p-list::-webkit-scrollbar { width: 0; height: 0; display: none; } /* Chrome/Safari */
 
 .p2p-status-message {
-  padding: 14px;
+  padding: 10px;
   text-align: center;
   color: var(--text-secondary);
-  font-size: 0.85em;
+  font-size: 0.74em;
 }
 
 .p2p-item {
-  padding: 8px 14px;
+  padding: 4px 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border);
-}
-
-.p2p-item:last-child {
-  border-bottom: none;
+  gap: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .p2p-meta {
   flex-grow: 1;
-  margin-right: 10px;
   min-width: 0;
 }
 
@@ -1035,28 +1050,33 @@ body.spectating-active #game {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 0.9em;
+  font-size: 0.74em;
+  line-height: 1.25;
 }
 
 .p2p-info {
-  font-size: 0.72em;
+  font-size: 0.6em;
   color: var(--text-secondary);
-  margin-top: 2px;
   text-transform: uppercase;
   letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.25;
 }
 
 .p2p-btn {
+  flex: 0 0 auto;
   background: var(--blue-dim, rgba(30, 111, 255, 0.15));
   border: 1px solid var(--blue, #1E6FFF);
   color: var(--blue-light, #52A8FF);
-  padding: 5px 10px;
+  padding: 3px 7px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 0.78em;
-  letter-spacing: 0.05em;
+  font-size: 0.64em;
+  letter-spacing: 0.04em;
   transition: all 0.2s ease;
 }
 

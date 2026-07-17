@@ -956,3 +956,172 @@ input[type=button]:hover {
 
 /* ===== INVITE INFO ===== */
 #invite-info { color: var(--text-secondary); font-size: 0.88em; margin: 6px 0; }
+
+/* ============================================================
+   P2P CROSS-SERVER SPECTATOR HUD ADDITIONS
+   ============================================================ */
+
+#p2p-panel {
+  position: fixed;
+  top: 80px;
+  left: 15px;
+  width: 250px;
+  background: rgba(15, 15, 26, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  z-index: 1000;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  transition: all 0.3s ease;
+}
+
+/* Hide interface panels when spectating a live peer to keep rendering clean */
+body.spectating-active #p2p-panel,
+body.spectating-active #intro,
+body.spectating-active #game {
+  display: none !important;
+}
+
+.p2p-header {
+  background: rgba(22, 22, 37, 0.9);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.8em;
+  letter-spacing: 0.08em;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.p2p-slot-tag {
+  font-size: 0.85em;
+  color: var(--red-hot, #FF2E42);
+  text-shadow: 0 0 8px rgba(232, 25, 44, 0.4);
+}
+
+#p2p-list {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.p2p-status-message {
+  padding: 14px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.85em;
+}
+
+.p2p-item {
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+
+.p2p-item:last-child {
+  border-bottom: none;
+}
+
+.p2p-meta {
+  flex-grow: 1;
+  margin-right: 10px;
+  min-width: 0;
+}
+
+.p2p-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.9em;
+}
+
+.p2p-info {
+  font-size: 0.72em;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.p2p-btn {
+  background: var(--blue-dim, rgba(30, 111, 255, 0.15));
+  border: 1px solid var(--blue, #1E6FFF);
+  color: var(--blue-light, #52A8FF);
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.78em;
+  letter-spacing: 0.05em;
+  transition: all 0.2s ease;
+}
+
+.p2p-btn:hover:not(:disabled) {
+  background: var(--blue, #1E6FFF);
+  color: white;
+  box-shadow: var(--shadow-blue);
+}
+
+.p2p-btn.active {
+  background: var(--red-dim, rgba(232, 25, 44, 0.15));
+  border-color: var(--red, #E8192C);
+  color: var(--red-hot, #FF2E42);
+}
+
+.p2p-btn.active:hover {
+  background: var(--red, #E8192C);
+  color: #white;
+  box-shadow: var(--shadow-red);
+}
+
+/* ===== FULL-SCREEN SPECTATOR STYLES ===== */
+#spectator-overlay {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 9999;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#spectator-render-view {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+#spectator-close-btn {
+  position: absolute;
+  top: 25px;
+  right: 25px;
+  background: linear-gradient(145deg, var(--red) 0%, #C0101F 100%);
+  border: none;
+  color: white;
+  font-family: var(--font-display);
+  font-size: 0.85em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 10px 22px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: var(--shadow-red);
+  transition: all 0.2s ease;
+  z-index: 10000;
+}
+
+#spectator-close-btn:hover {
+  background: linear-gradient(145deg, var(--red-hot) 0%, var(--red) 100%);
+  transform: translateY(-1px);
+}

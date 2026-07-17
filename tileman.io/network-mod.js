@@ -28,10 +28,14 @@
     const slotsToTry = Array.from({ length: MAX_SLOTS }, (_, i) => i + 1)
       .sort(() => Math.random() - 0.5);
 
-    function attemptNextSlot(list) {
+    function setStatus(msg) {
+      const el = document.querySelector('.p2p-status-message');
+      if (el) el.textContent = msg;
+    }
+
+    function attemptNextSlot(list, retriesLeft = 3) {
       if (list.length === 0) {
-        const msg = document.querySelector('.p2p-status-message');
-        if (msg) msg.textContent = 'All spectator slots are currently occupied.';
+        setStatus('All spectator slots are currently occupied.');
         return;
       }
 
@@ -55,11 +59,22 @@
       });
 
       tempPeer.on('error', (err) => {
+        tempPeer.destroy();
+
         if (err.type === 'unavailable-id') {
-          tempPeer.destroy();
-          attemptNextSlot(list);
+          attemptNextSlot(list, retriesLeft);
+          return;
+        }
+
+        // Broker/network-level failure (e.g. the WebSocket handshake to the
+        // signaling server itself failed) rather than a slot conflict.
+        console.error(`P2P registry lookup error:`, err);
+        if (retriesLeft > 0) {
+          setStatus('Connection hiccup — retrying...');
+          list.push(slot);
+          setTimeout(() => attemptNextSlot(list, retriesLeft - 1), 2000);
         } else {
-          console.error(`P2P registry lookup error:`, err);
+          setStatus('Unable to reach the P2P network. Check your connection and refresh.');
         }
       });
     }

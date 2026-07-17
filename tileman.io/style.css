@@ -1135,3 +1135,11 @@ body.spectating-active #game {
   background: linear-gradient(145deg, var(--red-hot) 0%, var(--red) 100%);
   transform: translateY(-1px);
 }
+
+.p2p-btn:disabled {
+  background: transparent;
+  border-color: var(--text-dim, #55556A);
+  color: var(--text-dim, #55556A);
+  cursor: not-allowed;
+  opacity: 0.6;
+}

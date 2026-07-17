@@ -5,10 +5,10 @@
 
 (function () {
   const SLOT_PREFIX = 'tileman-slot-';
-  const MAX_SLOTS = 15;
-  const SCAN_INTERVAL_MS = 2000;
-  const BROADCAST_FPS = 15;
-  const STALE_PEER_TIMEOUT_MS = 6000;
+  const MAX_SLOTS = 20;               // Maximum slots increased to 20
+  const SCAN_INTERVAL_MS = 1500;      // Accelerated scan interval to check dead channels
+  const BROADCAST_FPS = 30;           // Optimized frame-rate targets 30 FPS
+  const STALE_PEER_TIMEOUT_MS = 4500;  // Quicker stale peer timeouts to avoid ghost connections
 
   let mySlotId = null;
   let peer = null;
@@ -17,6 +17,11 @@
   const activeSpectators = new Set();  
   let spectatingSlot = null;           
   let broadcastTimer = null;           
+
+  // Rescaling offscreen context canvas to avoid DataChannel UDP bottlenecks
+  const scaleCanvas = document.createElement('canvas');
+  const scaleCtx = scaleCanvas.getContext('2d');
+  const TARGET_STREAM_WIDTH = 600; 
 
   function initializeMod() {
     const slotsToTry = Array.from({ length: MAX_SLOTS }, (_, i) => i + 1)
@@ -45,12 +50,6 @@
       tempPeer.on('open', () => {
         mySlotId = slot;
         peer = tempPeer;
-        
-        const mySlotTag = document.getElementById('p2p-my-slot');
-        if (mySlotTag) {
-          mySlotTag.textContent = `SLOT #${mySlotId}`;
-        }
-        
         setupMeshCallbacks();
       });
 
@@ -76,8 +75,14 @@
       }
     });
 
+    // Handle signaling server disconnects cleanly
+    peer.on('disconnected', () => {
+      console.warn('Disconnected from signaling server. Attempting reconnect...');
+      peer.reconnect();
+    });
+
     setInterval(scanNetworkMesh, SCAN_INTERVAL_MS);
-    setInterval(evictDeadNodes, 3000);
+    setInterval(evictDeadNodes, 2500);
 
     const closeBtn = document.getElementById('spectator-close-btn');
     if (closeBtn) {
@@ -96,7 +101,12 @@
       const connectionActive = activeConnections.has(s);
       if (connectionActive) {
         const conn = activeConnections.get(s);
-        if (conn.open) sendStatePing(conn);
+        if (conn.open) {
+          sendStatePing(conn);
+        } else {
+          // Tear down broken connections immediately so the next pass can reconstruct
+          activeConnections.delete(s);
+        }
       } else if (mySlotId < s) {
         connectToPeer(s);
       }
@@ -105,7 +115,10 @@
 
   function connectToPeer(targetSlot) {
     const targetPeerId = `${SLOT_PREFIX}${targetSlot}`;
-    const conn = peer.connect(targetPeerId, { serialization: 'json' });
+    const conn = peer.connect(targetPeerId, { 
+      serialization: 'json',
+      reliable: false // Setting reliable to false utilizes UDP pathways directly for faster streaming
+    });
     setupConnectionHandlers(conn, targetSlot);
   }
 
@@ -198,7 +211,19 @@
     }
 
     try {
-      const frameData = canvas.toDataURL('image/jpeg', 0.5);
+      let frameData;
+      const ratio = TARGET_STREAM_WIDTH / canvas.width;
+
+      if (ratio < 1) {
+        // Resize canvas before sending to reduce bandwidth footprint and sustain 30 FPS
+        scaleCanvas.width = TARGET_STREAM_WIDTH;
+        scaleCanvas.height = canvas.height * ratio;
+        scaleCtx.drawImage(canvas, 0, 0, scaleCanvas.width, scaleCanvas.height);
+        frameData = scaleCanvas.toDataURL('image/jpeg', 0.4);
+      } else {
+        frameData = canvas.toDataURL('image/jpeg', 0.4);
+      }
+
       const packet = { type: 'FRAME', data: frameData };
 
       activeSpectators.forEach((slotNum) => {
@@ -308,7 +333,6 @@
     updateUI();
   }
 
-  // Bind to dynamic TamState wrapper when instantiated
   const stateSync = setInterval(() => {
     if (window.TamState && typeof Peer !== 'undefined') {
       clearInterval(stateSync);

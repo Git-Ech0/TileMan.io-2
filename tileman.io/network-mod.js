@@ -1,14 +1,14 @@
 /**
  * TileMan.io Cross-Server Spectator Mod
- * Handles P2P stream state against static index.html and style.css components
+ * Handles P2P stream state with background tab sleep recovery mechanics
  */
 
 (function () {
   const SLOT_PREFIX = 'tileman-slot-';
-  const MAX_SLOTS = 20;               // Maximum slots increased to 20
-  const SCAN_INTERVAL_MS = 1500;      // Accelerated scan interval to check dead channels
-  const BROADCAST_FPS = 30;           // Optimized frame-rate targets 30 FPS
-  const STALE_PEER_TIMEOUT_MS = 4500;  // Quicker stale peer timeouts to avoid ghost connections
+  const MAX_SLOTS = 20;               
+  const SCAN_INTERVAL_MS = 1500;      
+  const BROADCAST_FPS = 30;           
+  const STALE_PEER_TIMEOUT_MS = 4500;  
 
   let mySlotId = null;
   let peer = null;
@@ -54,7 +54,12 @@
       });
 
       tempPeer.on('error', (err) => {
+        // Handle ID conflicts or generic signaling failures
         if (err.type === 'unavailable-id') {
+          tempPeer.destroy();
+          attemptNextSlot(list);
+        } else if (err.type === 'network' || err.type === 'socket-error') {
+          console.warn('Signaling registration failed. Retrying in fallback mode...');
           tempPeer.destroy();
           attemptNextSlot(list);
         } else {
@@ -75,10 +80,16 @@
       }
     });
 
-    // Handle signaling server disconnects cleanly
+    // Handle signaling server disconnects
     peer.on('disconnected', () => {
-      console.warn('Disconnected from signaling server. Attempting reconnect...');
+      console.warn('Disconnected from signaling server. Attempting socket reconnect...');
       peer.reconnect();
+    });
+
+    // If a fatal PeerJS error occurs, trigger a full rebuild
+    peer.on('error', (err) => {
+      console.error(`Fatal PeerJS error: ${err.type}. Rebuilding mesh instance...`);
+      rebuildEntirePeerInstance();
     });
 
     setInterval(scanNetworkMesh, SCAN_INTERVAL_MS);
@@ -89,11 +100,65 @@
       closeBtn.onclick = exitSpectatorView;
     }
 
+    // Tab recovery event handler
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     updateUI();
   }
 
+  // Self-Healing Wake-up Trigger
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+      console.log('Tab recovered from background state. Running self-healing verification...');
+      
+      // Clean up stale metadata that timed out during sleep
+      evictDeadNodes();
+
+      if (!peer || peer.destroyed) {
+        rebuildEntirePeerInstance();
+        return;
+      }
+
+      if (peer.disconnected) {
+        console.log('Signaling socket disconnected. Triggering explicit reconnect...');
+        peer.reconnect();
+      }
+
+      // Force immediate scanning pass without waiting for the interval clock
+      scanNetworkMesh();
+      updateUI();
+    }
+  }
+
+  function rebuildEntirePeerInstance() {
+    console.log('Teardown active. Resetting P2P network descriptors...');
+    
+    // Terminate connections cleanly
+    activeConnections.forEach((conn) => {
+      try { conn.close(); } catch (e) {}
+    });
+    
+    activeConnections.clear();
+    playerRegistry.clear();
+    activeSpectators.clear();
+    
+    if (spectatingSlot !== null) {
+      exitSpectatorView();
+    }
+
+    if (peer) {
+      try {
+        peer.destroy();
+      } catch (e) {}
+      peer = null;
+    }
+
+    // Re-initialize from scratch
+    initializeMod();
+  }
+
   function scanNetworkMesh() {
-    if (!peer || peer.destroyed) return;
+    if (!peer || peer.destroyed || peer.disconnected) return;
 
     for (let s = 1; s <= MAX_SLOTS; s++) {
       if (s === mySlotId) continue;
@@ -101,10 +166,10 @@
       const connectionActive = activeConnections.has(s);
       if (connectionActive) {
         const conn = activeConnections.get(s);
-        if (conn.open) {
+        if (conn && conn.open) {
           sendStatePing(conn);
         } else {
-          // Tear down broken connections immediately so the next pass can reconstruct
+          // Remove broken entries to allow reconnect
           activeConnections.delete(s);
         }
       } else if (mySlotId < s) {
@@ -117,7 +182,7 @@
     const targetPeerId = `${SLOT_PREFIX}${targetSlot}`;
     const conn = peer.connect(targetPeerId, { 
       serialization: 'json',
-      reliable: false // Setting reliable to false utilizes UDP pathways directly for faster streaming
+      reliable: false 
     });
     setupConnectionHandlers(conn, targetSlot);
   }
@@ -215,7 +280,6 @@
       const ratio = TARGET_STREAM_WIDTH / canvas.width;
 
       if (ratio < 1) {
-        // Resize canvas before sending to reduce bandwidth footprint and sustain 30 FPS
         scaleCanvas.width = TARGET_STREAM_WIDTH;
         scaleCanvas.height = canvas.height * ratio;
         scaleCtx.drawImage(canvas, 0, 0, scaleCanvas.width, scaleCanvas.height);

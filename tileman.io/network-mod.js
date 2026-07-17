@@ -247,6 +247,7 @@ import { joinRoom } from 'https://esm.run/trystero';
     if (window.TamState) {
       clearInterval(stateSync);
       window.TamState.forceDisconnectSpectator = exitSpectatorView;
+      window.TamState.getSpectatorCount = () => activeSpectators.size;
       initializeMod();
     }
   }, 100);

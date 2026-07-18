@@ -31,7 +31,7 @@ import { joinRoom } from 'https://esm.run/trystero';
 
   const BROADCAST_FPS = 30;
   const PING_INTERVAL_MS = 3000;
-  const TARGET_STREAM_WIDTH = 600;
+  const TARGET_STREAM_WIDTH = 1200;
 
   let room = null;
   let pingAction, subscribeAction, unsubscribeAction, frameAction;
@@ -177,7 +177,7 @@ import { joinRoom } from 'https://esm.run/trystero';
         activeSpectators.forEach((peerId) => {
           frameAction.send(blob, { target: peerId });
         });
-      }, 'image/jpeg', 0.4);
+      }, 'image/webp', 0.8);
     } catch (e) {
       console.error('Frame processing failure: ', e);
     }

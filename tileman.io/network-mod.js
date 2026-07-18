@@ -11,7 +11,7 @@ import { joinRoom } from 'https://esm.run/trystero';
 
 (function () {
   // Pick something genuinely unique to this app/deployment.
-  const APP_ID = 'tileman-io-p2p-spectator-v1';
+  const APP_ID = 'tileman-io-p2p-spectator-v2';
   const ROOM_ID = 'global';
 
   // TURN relay fallback for peer pairs that can't establish a direct WebRTC

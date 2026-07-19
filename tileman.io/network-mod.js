@@ -11,7 +11,7 @@ import { joinRoom } from 'https://esm.run/trystero';
 
 (function () {
   // Pick something genuinely unique to this app/deployment.
-  const APP_ID = 'tileman-io-p2p-spectator-v2';
+  const APP_ID = 'tileman-io-p2p-spectator-v3';
   const ROOM_ID = 'global';
 
   // TURN relay fallback for peer pairs that can't establish a direct WebRTC
@@ -36,7 +36,7 @@ import { joinRoom } from 'https://esm.run/trystero';
   let room = null;
   let pingAction, subscribeAction, unsubscribeAction, frameAction;
 
-  const playerRegistry = new Map();   // peerId -> { username, region, mode, isPlaying, lastSeen }
+  const playerRegistry = new Map();   // peerId -> { username, region, mode, isPlaying, lastSeen, allowSpectating }
   const activeSpectators = new Set(); // peerIds currently watching our stream
   let spectatingPeerId = null;
   let broadcastTimer = null;
@@ -189,12 +189,20 @@ import { joinRoom } from 'https://esm.run/trystero';
 
     list.innerHTML = '';
 
-    if (playerRegistry.size === 0) {
+    // Filter registry to only include peers who allow spectating
+    const visiblePeers = [];
+    playerRegistry.forEach((data, peerId) => {
+      if (data.allowSpectating) {
+        visiblePeers.push({ peerId, data });
+      }
+    });
+
+    if (visiblePeers.length === 0) {
       list.innerHTML = '<div class="p2p-status-message">Scanning global network...</div>';
       return;
     }
 
-    playerRegistry.forEach((data, peerId) => {
+    visiblePeers.forEach(({ peerId, data }) => {
       const item = document.createElement('div');
       item.className = 'p2p-item';
 
@@ -214,18 +222,13 @@ import { joinRoom } from 'https://esm.run/trystero';
         btn.className += ' active';
         btn.onclick = exitSpectatorView;
       } else {
-        if (!data.allowSpectating) {
-          btn.textContent = 'DISABLED';
+        btn.textContent = 'SPECTATE';
+        if (!data.isPlaying) {
           btn.disabled = true;
+          btn.style.opacity = '0.4';
+          btn.style.cursor = 'not-allowed';
         } else {
-          btn.textContent = 'SPECTATE';
-          if (!data.isPlaying) {
-            btn.disabled = true;
-            btn.style.opacity = '0.4';
-            btn.style.cursor = 'not-allowed';
-          } else {
-            btn.onclick = () => startSpectating(peerId);
-          }
+          btn.onclick = () => startSpectating(peerId);
         }
       }
 

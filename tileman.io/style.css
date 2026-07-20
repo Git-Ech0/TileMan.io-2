@@ -166,6 +166,13 @@ body::after {
   z-index: 0;
 }
 
+html.game_screen body::before,
+html.game_screen body::after,
+body.spectating-active::before,
+body.spectating-active::after {
+  display: none;
+}
+
 @keyframes gridShimmer {
   0%,100% { opacity: 0.4; }
   50%      { opacity: 1;   }

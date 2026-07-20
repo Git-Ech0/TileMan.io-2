@@ -650,15 +650,30 @@ function drawMinimap(ctx, canvas, session) {
     ctx.drawImage(minimapCanvas, ox, oy, size, size);
   }
 
-  if (selfRec) {
+  if (session.players.size > 0) {
     const markerSize = Math.max(4 * backingStoreRatio * resolutionMultiplier, 2);
-    const mx = markerSize + (selfRec.curr.x / (session.gridSize - 1)) * (size - 2 * markerSize);
-    const my = markerSize + (selfRec.curr.y / (session.gridSize - 1)) * (size - 2 * markerSize);
-    ctx.beginPath();
-    ctx.arc(ox + mx, oy + my, markerSize, 0, 2 * Math.PI);
-    ctx.fillStyle = 'rgba(250,250,250,0.7)';
-    ctx.fill();
-    ctx.stroke();
+    for (const rec of session.players.values()) {
+      const player = rec.curr;
+      if (!player.alive) continue;
+      const mx = markerSize + (player.x / (session.gridSize - 1)) * (size - 2 * markerSize);
+      const my = markerSize + (player.y / (session.gridSize - 1)) * (size - 2 * markerSize);
+      ctx.fillStyle = resolveColor(session, player.color);
+      ctx.beginPath();
+      ctx.arc(ox + mx, oy + my, markerSize, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // Keep the broadcaster's own marker identical to the native indicator.
+    if (selfRec) {
+      const mx = markerSize + (selfRec.curr.x / (session.gridSize - 1)) * (size - 2 * markerSize);
+      const my = markerSize + (selfRec.curr.y / (session.gridSize - 1)) * (size - 2 * markerSize);
+      ctx.beginPath();
+      ctx.arc(ox + mx, oy + my, markerSize, 0, 2 * Math.PI);
+      ctx.fillStyle = 'rgba(250,250,250,0.7)';
+      ctx.fill();
+      ctx.stroke();
+    }
   }
   ctx.imageSmoothingEnabled = true;
   ctx.restore();

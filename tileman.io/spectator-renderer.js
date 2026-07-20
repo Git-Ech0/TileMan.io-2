@@ -762,8 +762,16 @@ function drawRespawnCountdown(ctx, canvas, session) {
   const remaining = Math.max(0, h.respawnCooldownMs - (performance.now() - session.respawnReceivedAt));
   if (remaining <= 0) return;
 
+  // Font weight was hardcoded to 'bold' here regardless of what the
+  // broadcaster's own #timer element is actually styled as (their theme/CSS
+  // can set a different weight, and syncHostHud's applyHostTypography()
+  // already forwards the real computed weight in session.display.timer).
+  // This canvas overlay was ignoring that and always forcing bold, which is
+  // why the big center countdown could look bolder/lighter than the rest of
+  // the synced HUD text for the same broadcaster.
+  const fontWeight = session.display?.timer?.fontWeight || 'bold';
   ctx.save();
-  ctx.font = 'bold 28px Rajdhani, sans-serif';
+  ctx.font = `${fontWeight} 28px Rajdhani, sans-serif`;
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.9)';
   ctx.fillText(Math.ceil(remaining / 1000).toString(), canvas.width / 2, canvas.height / 2);

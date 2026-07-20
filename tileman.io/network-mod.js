@@ -24,7 +24,7 @@ import {
 } from './spectator-renderer.js';
 
 (function () {
-  const APP_ID = 'tileman-io-p2p-spectator-v4';
+  const APP_ID = 'tileman-io-p2p-spectator-v3';
   const ROOM_ID = 'global';
 
   // TURN relay fallback for peer pairs that can't establish a direct WebRTC
@@ -41,11 +41,15 @@ import {
   ];
 
   const PING_INTERVAL_MS = 3000;
-  const MAX_DELTA_HZ = 60;
-  const MIN_DELTA_FRAME_MS = 1000 / MAX_DELTA_HZ;
-  const DELTA_HZ = 24;                         // state ticks/sec sent to spectators (was 12 — the per-tick
-                                                // diff scan is sub-ms at documented gridSize ranges, so there
-                                                // was headroom; this was the real "why isn't it faster" cause)
+  const DELTA_HZ = 24;                         // state ticks/sec sent to spectators. This constant used to be
+                                                // declared but never actually wired up: MIN_DELTA_FRAME_MS was
+                                                // derived from a separate MAX_DELTA_HZ=60 constant instead, so
+                                                // deltas were really going out at up to 60/sec (rAF-capped),
+                                                // not the ~24/sec the old comment here claimed. Deriving the
+                                                // throttle from DELTA_HZ for real fixes that wiring bug, and
+                                                // 24 vs the actual 60/sec that was going out is exactly the
+                                                // ~60% cut requested (keeps 40% of the real current rate).
+  const MIN_DELTA_FRAME_MS = 1000 / DELTA_HZ;
   const KEYFRAME_RESYNC_MS = 8000;             // periodic full resync safety net
 
   let room = null;
@@ -162,7 +166,27 @@ import {
       if (payload.type === 'keyframe') {
         applyKeyframe(spectatorSession, payload);
       } else if (payload.type === 'delta') {
+        // broadcastDelta() diffs against a single shared gridShadow and just
+        // fires the result at every spectator — there's no per-peer ack, so
+        // if THIS delta message gets dropped (packet loss on a laggy/lossy
+        // P2P connection), whatever tiles changed in that tick are gone for
+        // good: the broadcaster's shadow has already moved on and won't
+        // re-diff those cells again. Previously the only recovery was the
+        // periodic 8s keyframe resync, so a consistently lossy peer could
+        // end up with tiles that never come back (or flicker in every 8s
+        // just to drop out again). `sequence` was already being tracked to
+        // reject stale/out-of-order packets, but nothing checked for GAPS.
+        // Detect a gap here and immediately re-subscribe — the broadcaster's
+        // subscribeAction handler sends a fresh keyframe unconditionally, so
+        // this self-heals within one round-trip instead of up to 8s.
+        const priorSeq = spectatorSession.sequence;
+        const gapDetected = payload.sequence !== undefined
+          && priorSeq !== undefined && priorSeq !== -1
+          && payload.sequence > priorSeq + 1;
         applyDelta(spectatorSession, payload);
+        if (gapDetected) {
+          subscribeAction.send(null, { target: peerId });
+        }
       }
     };
 

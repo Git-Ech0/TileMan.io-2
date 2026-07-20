@@ -261,6 +261,7 @@ function syncHostHud(session) {
   const layer = ensureDisplayLayer();
   if (!layer) return;
   layer.className = `spectator-host-hud ${display.htmlClassName || ''}`;
+  layer.style.fontSize = display.game?.fontSize || '';
   const hud = display.hud || {};
   const groups = {
     leftbottom: ['playerName', 'score', 'captured', 'kills', 'rank', 'capturedCombo', 'capturedPlus', 'killsCombo'],
@@ -438,21 +439,33 @@ export function renderFrame(canvas, session) {
   const gridSize = session.gridSize;
   const hostToggles = session.renderSettings && session.renderSettings.toggles;
   const hostGeometry = session.renderSettings && session.renderSettings.geometry;
+  const localPlayerTarget = hostGeometry?.localPlayerTarget || cameraPos;
+  const cameraOffsetXY = hostGeometry?.cameraOffsetXY || [0, 0];
+  const isLayoutHorizontal = hostGeometry?.isLayoutHorizontal !== false;
   const hostZoom = hostToggles?.isCameraZoomEnabled
     ? (hostGeometry?.cameraZoomFactor || 1)
     : 1;
   const tileRadiusX = Math.round(TILE_DRAW_RADIUS_X / hostZoom);
   const tileRadiusY = Math.round(TILE_DRAW_RADIUS_Y / hostZoom);
 
-  const viewTilesX = tileRadiusX * 2 + 1;
-  const viewTilesY = tileRadiusY * 2 + 1;
-  const scaleX = canvas.width / (viewTilesX * TILE_PX);
-  const scaleY = canvas.height / (viewTilesY * TILE_PX);
+  const idealWidth = isLayoutHorizontal
+    ? 1100 * Math.min(1, (canvas.width * 0.5625) / canvas.height)
+    : 1100 * Math.min(1, (canvas.height * 0.5625) / canvas.width);
+  const scaleA = Math.max(canvas.width, canvas.height) / 430;
+  const scaleB = Math.sqrt((canvas.width * canvas.height) / idealWidth) / 10;
+  const scaleX = Math.max(scaleB, scaleA) * hostZoom;
+  const scaleY = scaleX;
 
   function worldToScreen(wx, wy) {
+    if (!isLayoutHorizontal) {
+      return {
+        x: canvas.width / 2 - scaleX * (wy * TILE_PX - localPlayerTarget[1] * TILE_PX - 5 - cameraOffsetXY[1]),
+        y: canvas.height / 2 + scaleY * (wx * TILE_PX - localPlayerTarget[0] * TILE_PX - 5 - cameraOffsetXY[0]),
+      };
+    }
     return {
-      x: (wx - cameraPos[0] + tileRadiusX) * TILE_PX * scaleX,
-      y: (wy - cameraPos[1] + tileRadiusY) * TILE_PX * scaleY,
+      x: canvas.width / 2 + scaleX * (wx * TILE_PX - localPlayerTarget[0] * TILE_PX - 5 - cameraOffsetXY[0]),
+      y: canvas.height / 2 + scaleY * (wy * TILE_PX - localPlayerTarget[1] * TILE_PX - 5 - cameraOffsetXY[1]),
     };
   }
 
@@ -559,7 +572,9 @@ function drawMinimap(ctx, canvas, session) {
 
   const selfRec = session.players.get(session.selfId);
   const ownColor = selfRec ? resolveColor(session, selfRec.curr.color) : '#fff';
-  ctx.fillStyle = ownColor;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(ox, oy, size, size);
+  ctx.fillStyle = '#000';
   for (let mx = 0; mx < mw; mx++) {
     for (let my = 0; my < mw; my++) {
       if (session.collisionBuffer[mx * mw + my]) {
@@ -757,19 +772,19 @@ function drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, isSelf
     if (tail && p.x !== tail[0] && p.y !== tail[1]) {
       points.push(p.d === 1 || p.d === 3 ? [p.x, tail[1]] : [tail[0], p.y]);
     }
-    const start = worldToScreen(points[0][0], points[0][1]);
+    const start = worldToScreen(points[0][0] + 0.5, points[0][1] + 0.5);
     ctx.moveTo(start.x, start.y);
     for (let i = 1; i < points.length; i++) {
-      const pt = worldToScreen(points[i][0], points[i][1]);
+      const pt = worldToScreen(points[i][0] + 0.5, points[i][1] + 0.5);
       ctx.lineTo(pt.x, pt.y);
     }
-    const head = worldToScreen(wx, wy);
+    const head = worldToScreen(wx + 0.5, wy + 0.5);
     ctx.lineTo(head.x, head.y);
     ctx.stroke();
   }
 
   // Head dot
-  const { x: dx, y: dy } = worldToScreen(wx, wy);
+  const { x: dx, y: dy } = worldToScreen(wx + 0.5, wy + 0.5);
   const r = 5 * scaleX;
 
   ctx.beginPath();
@@ -786,7 +801,7 @@ function drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, isSelf
   ctx.stroke();
 
   if (isSelf && session.renderSettings?.toggles?.renderServerPosition && p.serverPosition) {
-    const server = worldToScreen(p.serverPosition[0], p.serverPosition[1]);
+    const server = worldToScreen(p.serverPosition[0] + 0.5, p.serverPosition[1] + 0.5);
     ctx.fillStyle = 'rgba(0,0,0,.2)';
     ctx.beginPath();
     ctx.arc(server.x, server.y, r, 0, 2 * Math.PI);
@@ -823,10 +838,16 @@ function drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, isSelf
   // Name label
   if (p.name && !isSelf && (session.renderSettings?.toggles?.showNames ?? session.viewerSettings.showNames !== false)) {
     ctx.globalAlpha = alpha;
-    ctx.font = `${Math.max(10, 12 * scaleX)}px Rajdhani, sans-serif`;
+    ctx.font = `${6 * scaleX}px Arial, sans-serif`;
     ctx.textAlign = 'center';
-    ctx.fillStyle = '#fff';
-    ctx.fillText(p.name, dx, dy - r - 4);
+    ctx.textBaseline = 'bottom';
+    ctx.shadowColor = 'rgba(0,0,0,1)';
+    ctx.shadowBlur = 1.25 * scaleX;
+    ctx.shadowOffsetX = ctx.shadowOffsetY = .5 * scaleX;
+    ctx.fillStyle = color;
+    ctx.fillText(p.name, dx, dy - r - 3 * scaleX);
+    ctx.shadowColor = 'black';
+    ctx.shadowBlur = 0;
   }
 
   ctx.restore();

@@ -249,13 +249,7 @@ import {
 
   function broadcastPump(now) {
     if (!broadcastTimer) return;
-    const T = window.TamState;
-    const zoom = T?.isCameraZoomEnabled === false ? 1 : (T?.cameraZoomFactor || 1);
-    // renderActiveGrid() expands from roughly 45x27 cells to hundreds of
-    // cells at extreme zoom-out. Avoid adding a full-grid P2P diff scan to
-    // that same host frame; the viewer keeps interpolating between updates.
-    const frameInterval = zoom < 0.2 ? 100 : zoom < 0.4 ? 50 : MIN_DELTA_FRAME_MS;
-    if (now - lastBroadcastFrameAt >= frameInterval) {
+    if (now - lastBroadcastFrameAt >= MIN_DELTA_FRAME_MS) {
       lastBroadcastFrameAt = now;
       broadcastDelta();
     }

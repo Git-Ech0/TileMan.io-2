@@ -2,36 +2,45 @@
  * TileMan.io Spectator Renderer
  *
  * Consumes the state contract broadcast by network-mod.js (keyframe + delta
- * messages built from window.TamState) and paints it onto a <canvas>, the
- * same way the real game paints its own canvas from its own local state.
+ * messages built from window.TamState) and paints it onto a <canvas>.
  *
- * This is a *parallel* renderer, not a hook into hra.min.js's internal
- * renderActiveGrid()/drawPlayer() — those are closures over private,
- * un-exported module variables and can't safely be called with foreign
- * data. Re-implementing the drawing logic here, driven purely by the
- * documented TAM_MAP shapes, is the practical alternative and keeps
- * hra.min.js completely untouched (so upstream updates to it can't break
- * this file, and vice versa).
+ * This still can't call hra.min.js's actual renderActiveGrid()/drawPlayer()
+ * live — they're closures over private module variables, gated behind
+ * isGameActive (which also arms input handling and socket movement
+ * emission), and movePlayer() mutates player positions in place using
+ * this client's own prediction physics, so pointing any of that at a
+ * remote peer's snapshot risks corrupting this client's real match state.
+ * That hasn't changed.
  *
- * Known simplifications vs. the real renderer (fine for spectating, but
- * worth knowing about if you want pixel-perfect parity later):
- *   - No subpixel zoom-overlap smoothing on tile edges.
- *   - No minimap "projection shadow" for previously-seen-but-now-offscreen
- *     territory.
- *   - No custom player skins (e.g. the Tomas123 easter egg).
- *   - Arena border mode 2 (bordered tiles) is drawn simply, not with the
- *     exact stroke geometry hra.min.js uses.
+ * What *has* changed: this file now ports the actual per-pixel algorithms
+ * from those functions (camera transform, tile run-drawing, arena border
+ * geometry, minimap-as-bitmap, player head/trail/shield rendering) as
+ * static code, instead of a rough from-scratch approximation. It's driven
+ * by the same viewer-local settings the broadcaster's own client uses
+ * (snake border size, camera zoom, animations, minimap projection, grid
+ * colors), synced via the read-only getters added to hra_min.js's
+ * TamState instrumentation API.
+ *
+ * Remaining known simplifications (small, intentionally not chased):
+ *   - Emotes are drawn as simple heart/skull glyphs, not the original's
+ *     hand-built bezier vector shapes — those are cosmetic flourishes and
+ *     porting the exact curve math wasn't worth the risk of subtly
+ *     breaking it under time pressure. Fully portable later if wanted.
+ *   - The debug-lines overlay (isDebugLinesEnabled) isn't ported; it's a
+ *     developer tool, not something a spectator needs.
  */
 
-const TILE_PX = 10;
 const INTERP_DELAY_MS = 60; // render slightly "in the past" for smooth motion between ticks
                              // (was 100ms, sized for the old 12Hz/83ms tick gap; at 24Hz/~42ms
                              // gap this stays safely above one tick's worth of jitter margin
                              // while cutting perceived input lag)
 const CAPTURE_FLASH_MS = 400;
 const DEATH_FADE_MS = 1000;
-const INVINCIBLE_FADE_START_MS = 2000;
-const INVINCIBLE_FADE_END_MS = 4000;
+const INVINCIBLE_GRACE_MS = 2000;   // matches hra_min.js's drawPlayer: shield stays fully opaque this long...
+const INVINCIBLE_FADE_END_MS = 4000; // ...then fades out by this point.
+const TILE_DRAW_RADIUS_X = 22; // hra_min.js renderActiveGrid's rx/ry — NOT the same as the
+const TILE_DRAW_RADIUS_Y = 13; // exposed cameraWidthDelta/cameraHeightDelta (23/14), which is
+                                // used for background-fill sizing only, one tile larger.
 
 export function createSession() {
   return {
@@ -40,17 +49,39 @@ export function createSession() {
     tiles: null,            // flat array, tiles[x * gridSize + y] = raw color string
     tileFlash: null,        // flat array, tileFlash[x * gridSize + y] = timestamp of last capture or null
     colorPalette: [],
+    activeColorPalette: {}, // raw hex -> brightness-adjusted hex, from the broadcaster's own settings
     emptyCellColor: '#666666',
     backgroundColor: '#333333',
     arenaSetting: 0,
     bounds: { lobby: [], safe: [], trail: [] },
     players: new Map(),     // id -> { prev, curr, prevT, currT }
-    camera: { pos: [0, 0], widthDelta: 22, heightDelta: 13 },
+    camera: { pos: [0, 0], widthDelta: 23, heightDelta: 14 }, // matches TamState's cameraWidthDelta/
+                                                                 // cameraHeightDelta — used for background-
+                                                                 // fill sizing, NOT the tile-draw radius
+                                                                 // (see TILE_DRAW_RADIUS_X/Y below)
     lastDeltaAt: 0,
 
     selfId: null,           // id of the player being spectated, within `players`
     minimapWidth: 0,
     collisionBuffer: null,  // flat array of 0/1, collisionBuffer[mx * minimapWidth + my]
+    minimapCanvas: null,    // offscreen <canvas>, redrawn from collisionBuffer each frame, then
+                             // blitted with drawImage — mirrors hra_min.js's own offscreenCanvas
+                             // approach instead of drawing thousands of individual rects.
+    projectionSeen: null,   // flat Uint8Array, mirrors hra_min.js's per-viewer "have I had this
+                             // minimap cell in my live viewport at some point" cache. Purely
+                             // local — same algorithm as the source, so no need to sync it.
+
+    viewerSettings: {
+      snakeSizeRatio: 3,
+      isCameraZoomEnabled: true,
+      cameraZoomFactor: 1,
+      areAnimationsEnabled: true,
+      isMinimapProjectionEnabled: false,
+      emptyCellColor: '#666666',
+      cellBgColor: '#3a3a3a',
+      projectionShadowColor: '#666666',
+      customSkinsEnabled: true,
+    },
 
     hud: {
       finalScore: 0, totalKills: 0, pointScaleFactor: 100,
@@ -71,6 +102,8 @@ export function destroySession(session) {
   session.tiles = null;
   session.collisionBuffer = null;
   session.chatFeed = [];
+  session.minimapCanvas = null;
+  session.projectionSeen = null;
   session.ready = false;
 }
 
@@ -97,6 +130,7 @@ export function applyKeyframe(session, kf) {
   session.tiles = decodeGridRLE(kf.tiles, kf.gridSize);
   session.tileFlash = new Array(kf.gridSize * kf.gridSize).fill(null);
   session.colorPalette = kf.colorPalette;
+  session.activeColorPalette = kf.activeColorPalette || {};
   session.emptyCellColor = kf.emptyCellColor;
   session.backgroundColor = kf.backgroundColor;
   session.arenaSetting = kf.arenaSetting;
@@ -104,6 +138,21 @@ export function applyKeyframe(session, kf) {
   session.minimapWidth = kf.minimapWidth || 0;
   session.collisionBuffer = kf.collisionBuffer ? kf.collisionBuffer.slice() : null;
   session.leaderboard = kf.leaderboard || [];
+  if (kf.viewerSettings) session.viewerSettings = kf.viewerSettings;
+
+  if (session.minimapWidth > 0) {
+    session.projectionSeen = new Uint8Array(session.minimapWidth * session.minimapWidth);
+    if (typeof document !== 'undefined') {
+      const c = document.createElement('canvas');
+      c.width = session.minimapWidth;
+      c.height = session.minimapWidth;
+      session.minimapCanvas = c;
+    }
+  } else {
+    session.projectionSeen = null;
+    session.minimapCanvas = null;
+  }
+
   session.ready = true;
 }
 
@@ -160,6 +209,7 @@ export function applyDelta(session, delta) {
   session.selfId = delta.selfId;
   if (delta.hud) session.hud = delta.hud;
   if (delta.leaderboard) session.leaderboard = delta.leaderboard;
+  if (delta.viewerSettings) session.viewerSettings = delta.viewerSettings;
 
   if (delta.hud && delta.hud.respawnCooldownMs !== session.hud.respawnCooldownMs) {
     session.respawnReceivedAt = delta.hud.respawnCooldownMs !== null ? now : null;

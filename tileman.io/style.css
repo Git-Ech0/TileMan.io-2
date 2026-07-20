@@ -1105,12 +1105,18 @@ body.spectating-active #game {
   align-items: center;
 }
 
+#spectator-host-stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  overflow: hidden;
+  transform-origin: center;
+}
+
 #spectator-render-view {
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 #spectator-host-hud {
@@ -1118,15 +1124,6 @@ body.spectating-active #game {
   inset: 0;
   pointer-events: none;
   z-index: 10000;
-}
-
-#spectator-host-hud #leftbottom,
-#spectator-host-hud #leaderboard,
-#spectator-host-hud #timer,
-#spectator-host-hud #performance_stats,
-#spectator-host-hud #title,
-#spectator-host-hud #after {
-  position: fixed;
 }
 
 #spectator-host-hud #after .buttons {

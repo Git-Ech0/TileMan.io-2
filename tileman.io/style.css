@@ -1130,6 +1130,13 @@ body.spectating-active #game {
   display: none;
 }
 
+/* The host game styles its headings through #game h3. The stage replaces
+   #game while preserving the same host-pixel coordinate system. */
+#spectator-host-stage h3 {
+  text-align: center;
+  margin: 0.25em 0;
+}
+
 /* Shown over the (now-blank) render view while the spectated player is
    dead or has left the match — see network-mod.js handleSpectatedStateChange() */
 #spectator-death-notice {

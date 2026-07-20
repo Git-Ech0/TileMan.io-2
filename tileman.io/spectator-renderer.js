@@ -225,10 +225,31 @@ const HUD_ELEMENT_IDS = [
   'leftbottom', 'leaderboard', 'timer', 'performance_stats', 'title', 'after',
 ];
 
-function ensureDisplayLayer() {
+function ensureHostStage(canvas, session) {
   if (typeof document === 'undefined') return null;
   const overlay = document.getElementById('spectator-overlay');
   if (!overlay) return null;
+  let stage = document.getElementById('spectator-host-stage');
+  if (!stage) {
+    stage = document.createElement('div');
+    stage.id = 'spectator-host-stage';
+    overlay.insertBefore(stage, overlay.firstChild);
+  }
+  if (canvas.parentElement !== stage) stage.appendChild(canvas);
+  const geometry = session.renderSettings?.geometry;
+  const hostWidth = geometry?.viewportWidth || geometry?.canvasWidth || window.innerWidth;
+  const hostHeight = geometry?.viewportHeight || geometry?.canvasHeight || window.innerHeight;
+  const scale = Math.min(window.innerWidth / hostWidth, window.innerHeight / hostHeight);
+  stage.style.width = `${hostWidth}px`;
+  stage.style.height = `${hostHeight}px`;
+  stage.style.transform = `translate(-50%, -50%) scale(${scale})`;
+  return stage;
+}
+
+function ensureDisplayLayer() {
+  if (typeof document === 'undefined') return null;
+  const stage = document.getElementById('spectator-host-stage');
+  if (!stage) return null;
   let layer = document.getElementById('spectator-host-hud');
   if (layer) return layer;
   layer = document.createElement('div');
@@ -241,7 +262,7 @@ function ensureDisplayLayer() {
     clone.dataset.hostId = id;
     layer.appendChild(clone);
   }
-  overlay.appendChild(layer);
+  stage.appendChild(layer);
   return layer;
 }
 
@@ -432,6 +453,7 @@ export function renderFrame(canvas, session) {
     canvas.width = geometry.canvasWidth;
     canvas.height = geometry.canvasHeight;
   }
+  ensureHostStage(canvas, session);
   syncHostHud(session);
 
   const renderTime = performance.now() - INTERP_DELAY_MS;
@@ -740,6 +762,36 @@ function drawPathfinding(ctx, session, worldToScreen) {
   ctx.restore();
 }
 
+function getNameCanvas(rec, color) {
+  const p = rec.curr;
+  if (rec.nameCanvas && rec.nameCanvasName === p.name && rec.nameCanvasColor === color) return rec.nameCanvas;
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  const nameCtx = canvas.getContext('2d');
+  const entities = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#039;': "'" };
+  const name = p.name.replace(/&amp;|&lt;|&gt;|&quot;|&#039;/g, (value) => entities[value]);
+  nameCtx.font = '48px arial';
+  const width = Math.min(800, nameCtx.measureText(name).width);
+  canvas.width = width + 16;
+  canvas.height = 64;
+  nameCtx.font = '48px arial';
+  nameCtx.textBaseline = 'top';
+  nameCtx.shadowColor = 'rgba(0,0,0,1.0)';
+  nameCtx.shadowBlur = 10;
+  nameCtx.shadowOffsetX = nameCtx.shadowOffsetY = 4;
+  nameCtx.fillStyle = color;
+  nameCtx.fillText(name, 8, 8);
+  nameCtx.shadowColor = 'black';
+  nameCtx.shadowBlur = 0;
+  nameCtx.shadowOffsetX = nameCtx.shadowOffsetY = 1.6;
+  nameCtx.fillStyle = 'rgba(255,255,255,.3)';
+  nameCtx.fillText(name, 8, 8);
+  rec.nameCanvas = canvas;
+  rec.nameCanvasName = p.name;
+  rec.nameCanvasColor = color;
+  return canvas;
+}
+
 function drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, isSelf) {
   const p = rec.curr;
   let alpha = 1;
@@ -838,16 +890,16 @@ function drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, isSelf
   // Name label
   if (p.name && !isSelf && (session.renderSettings?.toggles?.showNames ?? session.viewerSettings.showNames !== false)) {
     ctx.globalAlpha = alpha;
-    ctx.font = `${6 * scaleX}px Arial, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-    ctx.shadowColor = 'rgba(0,0,0,1)';
-    ctx.shadowBlur = 1.25 * scaleX;
-    ctx.shadowOffsetX = ctx.shadowOffsetY = .5 * scaleX;
-    ctx.fillStyle = color;
-    ctx.fillText(p.name, dx, dy - r - 3 * scaleX);
-    ctx.shadowColor = 'black';
-    ctx.shadowBlur = 0;
+    const nameCanvas = getNameCanvas(rec, color);
+    if (nameCanvas) {
+      ctx.drawImage(
+        nameCanvas,
+        dx - (nameCanvas.width / 16 + 1) * scaleX,
+        dy - 9 * scaleX,
+        (nameCanvas.width / 8) * scaleX,
+        (nameCanvas.height / 8) * scaleY
+      );
+    }
   }
 
   ctx.restore();

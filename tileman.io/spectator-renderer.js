@@ -36,7 +36,9 @@ const INTERP_DELAY_MS = 60; // render slightly "in the past" for smooth motion b
                              // while cutting perceived input lag)
 const CAPTURE_FLASH_MS = 400;
 const DEATH_FADE_MS = 1000;
+const TILE_PX = 10;
 const INVINCIBLE_GRACE_MS = 2000;   // matches hra_min.js's drawPlayer: shield stays fully opaque this long...
+const INVINCIBLE_FADE_START_MS = INVINCIBLE_GRACE_MS;
 const INVINCIBLE_FADE_END_MS = 4000; // ...then fades out by this point.
 const TILE_DRAW_RADIUS_X = 22; // hra_min.js renderActiveGrid's rx/ry — NOT the same as the
 const TILE_DRAW_RADIUS_Y = 13; // exposed cameraWidthDelta/cameraHeightDelta (23/14), which is
@@ -60,6 +62,8 @@ export function createSession() {
                                                                  // fill sizing, NOT the tile-draw radius
                                                                  // (see TILE_DRAW_RADIUS_X/Y below)
     lastDeltaAt: 0,
+    sequence: -1,
+    matchState: 'LOBBY',
 
     selfId: null,           // id of the player being spectated, within `players`
     minimapWidth: 0,
@@ -82,6 +86,10 @@ export function createSession() {
       projectionShadowColor: '#666666',
       customSkinsEnabled: true,
     },
+    renderSettings: null,
+    display: null,
+    pathfinding: { selfPath: [], enemyPaths: [] },
+    hostCanvas: { width: 0, height: 0 },
 
     hud: {
       finalScore: 0, totalKills: 0, pointScaleFactor: 100,
@@ -125,7 +133,194 @@ export function decodeGridRLE(runs, gridSize) {
   return tiles;
 }
 
+function timestampFromAge(ageMs, now) {
+  return ageMs === null || ageMs === undefined ? null : now - Math.max(0, ageMs);
+}
+
+function snapshotPlayer(p, now) {
+  const pos = p.pos || [p.x || 0, p.y || 0];
+  const emote = p.emote
+    ? { type: p.emote.type, t: timestampFromAge(p.emote.ageMs, now) }
+    : null;
+  return {
+    x: pos[0],
+    y: pos[1],
+    d: p.d,
+    color: p.color,
+    name: p.name || '',
+    trail: p.trail || [],
+    isLocal: !!p.isLocal,
+    alive: p.alive !== false,
+    deathT: timestampFromAge(p.deathAgeMs, now),
+    invincible: !!p.invincible,
+    invincibleT: timestampFromAge(p.invincibleAgeMs, now),
+    emote,
+    serverPosition: p.serverPosition || null,
+    serverDirection: p.serverDirection,
+  };
+}
+
+function applyPlayers(session, players, now) {
+  if (!players) return;
+  const seen = new Set();
+  for (const p of players) {
+    if (!p || p.id === undefined || p.id === null) continue;
+    seen.add(p.id);
+    const current = snapshotPlayer(p, now);
+    const existing = session.players.get(p.id);
+    if (existing) {
+      existing.prev = existing.curr;
+      existing.prevT = existing.currT;
+      existing.curr = current;
+      existing.currT = now;
+    } else {
+      session.players.set(p.id, { prev: current, curr: current, prevT: now, currT: now });
+    }
+  }
+  for (const id of session.players.keys()) {
+    if (!seen.has(id)) session.players.delete(id);
+  }
+}
+
+function applyTileAnimations(session, animations, now) {
+  if (!session.tileFlash || !animations) return;
+  for (const item of animations) {
+    const x = item[0];
+    const y = item[1];
+    const ageMs = item[2];
+    if (x < 0 || y < 0 || x >= session.gridSize || y >= session.gridSize) continue;
+    session.tileFlash[x * session.gridSize + y] = timestampFromAge(ageMs, now);
+  }
+}
+
+function applyFullState(session, payload, now) {
+  if (payload.sequence !== undefined && payload.sequence < session.sequence) return false;
+  if (payload.sequence !== undefined) session.sequence = payload.sequence;
+  session.matchState = payload.matchState || session.matchState;
+  if (payload.selfId !== undefined) session.selfId = payload.selfId;
+  if (payload.hud) {
+    const previousCooldown = session.hud.respawnCooldownMs;
+    session.hud = payload.hud;
+    if (payload.hud.respawnCooldownMs !== previousCooldown) {
+      session.respawnReceivedAt = payload.hud.respawnCooldownMs === null ? null : now;
+    }
+  }
+  if (payload.leaderboard) session.leaderboard = payload.leaderboard;
+  if (payload.viewerSettings) session.viewerSettings = payload.viewerSettings;
+  if (payload.renderSettings) session.renderSettings = payload.renderSettings;
+  if (payload.display) session.display = payload.display;
+  if (payload.pathfinding) session.pathfinding = payload.pathfinding;
+  if (payload.cameraPos) session.camera.pos = payload.cameraPos.slice();
+  if (payload.cameraWidthDelta !== undefined) session.camera.widthDelta = payload.cameraWidthDelta;
+  if (payload.cameraHeightDelta !== undefined) session.camera.heightDelta = payload.cameraHeightDelta;
+  const geometry = session.renderSettings && session.renderSettings.geometry;
+  if (geometry) {
+    session.hostCanvas.width = geometry.canvasWidth || 0;
+    session.hostCanvas.height = geometry.canvasHeight || 0;
+  }
+  return true;
+}
+
+const HUD_ELEMENT_IDS = [
+  'leftbottom', 'leaderboard', 'timer', 'performance_stats', 'title', 'after',
+];
+
+function ensureDisplayLayer() {
+  if (typeof document === 'undefined') return null;
+  const overlay = document.getElementById('spectator-overlay');
+  if (!overlay) return null;
+  let layer = document.getElementById('spectator-host-hud');
+  if (layer) return layer;
+  layer = document.createElement('div');
+  layer.id = 'spectator-host-hud';
+  layer.setAttribute('aria-hidden', 'true');
+  for (const id of HUD_ELEMENT_IDS) {
+    const source = document.getElementById(id);
+    if (!source) continue;
+    const clone = source.cloneNode(true);
+    clone.dataset.hostId = id;
+    layer.appendChild(clone);
+  }
+  overlay.appendChild(layer);
+  return layer;
+}
+
+function syncElementSnapshot(layer, id, snapshot) {
+  if (!snapshot) return;
+  const element = layer.querySelector(`[data-host-id="${id}"]`) || layer.querySelector(`#${id}`);
+  if (!element) return;
+  element.innerHTML = snapshot.html || '';
+  element.className = snapshot.className || '';
+  if (snapshot.style) element.setAttribute('style', snapshot.style);
+  if (snapshot.display === 'none') element.style.display = 'none';
+}
+
+function syncHostHud(session) {
+  const display = session.display;
+  if (!display) return;
+  const layer = ensureDisplayLayer();
+  if (!layer) return;
+  layer.className = `spectator-host-hud ${display.htmlClassName || ''}`;
+  const hud = display.hud || {};
+  const groups = {
+    leftbottom: ['playerName', 'score', 'captured', 'kills', 'rank', 'capturedCombo', 'capturedPlus', 'killsCombo'],
+    performance_stats: ['fps', 'latency', 'latencyToServer', 'regionName'],
+  };
+  for (const key of groups.leftbottom) {
+    const element = layer.querySelector(`[data-host-id="leftbottom"] #${({ playerName: 'player_name', score: 'score', captured: 'captured', kills: 'kills', rank: 'rank', capturedCombo: 'captcombo', capturedPlus: 'captplus', killsCombo: 'killscombo' })[key]}`);
+    if (element && hud[key]) {
+      element.innerHTML = hud[key].html || '';
+      element.className = hud[key].className || '';
+      if (hud[key].style) element.setAttribute('style', hud[key].style);
+    }
+  }
+  for (const key of groups.performance_stats) {
+    const element = layer.querySelector(`[data-host-id="performance_stats"] #${({ fps: 'fps', latency: 'latency', latencyToServer: 'latencytoserver', regionName: 'regname' })[key]}`);
+    if (element && hud[key]) {
+      element.innerHTML = hud[key].html || '';
+      element.className = hud[key].className || '';
+      if (hud[key].style) element.setAttribute('style', hud[key].style);
+    }
+  }
+  const allHudIds = {
+    playerName: 'player_name', score: 'score', captured: 'captured', kills: 'kills', rank: 'rank',
+    capturedCombo: 'captcombo', capturedPlus: 'captplus', killsCombo: 'killscombo',
+    timeAlive: 'time_alive', killMetricLabel: 'kill_metric_label', killMetricValue: 'kill_metric_val',
+    fps: 'fps', latency: 'latency', latencyToServer: 'latencytoserver', regionName: 'regname',
+    spectatorInfo: 'spectator-info', spectatorCount: 'spectator-count',
+  };
+  for (const [key, id] of Object.entries(allHudIds)) {
+    const element = layer.querySelector(`#${id}`);
+    if (!element || !hud[key]) continue;
+    element.innerHTML = hud[key].html || '';
+    element.className = hud[key].className || '';
+    if (hud[key].style) element.setAttribute('style', hud[key].style);
+  }
+  syncElementSnapshot(layer, 'timer', display.timer);
+  syncElementSnapshot(layer, 'title', display.title);
+  const leaders = layer.querySelector('[data-host-id="leaderboard"] #leaders');
+  if (leaders) leaders.innerHTML = display.leaderboardHtml || '';
+  const card = display.scoreCard;
+  const after = layer.querySelector('[data-host-id="after"]');
+  if (after && card) {
+    after.style.display = card.active ? 'block' : 'none';
+    const scoreValues = {
+      info2: card.info,
+      bl: card.last?.tiles, kl: card.last?.kills, til: card.last?.alive, trl: card.last?.trail,
+      bh: card.high?.tiles, kh: card.high?.kills, tih: card.high?.alive, trh: card.high?.trail,
+    };
+    for (const [id, snapshot] of Object.entries(scoreValues)) {
+      const element = after.querySelector(`#${id}`);
+      if (!element || !snapshot) continue;
+      element.innerHTML = snapshot.html || '';
+      element.className = snapshot.className || '';
+      if (snapshot.style) element.setAttribute('style', snapshot.style);
+    }
+  }
+}
+
 export function applyKeyframe(session, kf) {
+  const now = performance.now();
   session.gridSize = kf.gridSize;
   session.tiles = decodeGridRLE(kf.tiles, kf.gridSize);
   session.tileFlash = new Array(kf.gridSize * kf.gridSize).fill(null);
@@ -138,7 +333,9 @@ export function applyKeyframe(session, kf) {
   session.minimapWidth = kf.minimapWidth || 0;
   session.collisionBuffer = kf.collisionBuffer ? kf.collisionBuffer.slice() : null;
   session.leaderboard = kf.leaderboard || [];
-  if (kf.viewerSettings) session.viewerSettings = kf.viewerSettings;
+  applyFullState(session, kf, now);
+  applyTileAnimations(session, kf.tileAnimations, now);
+  applyPlayers(session, kf.players || [], now);
 
   if (session.minimapWidth > 0) {
     session.projectionSeen = new Uint8Array(session.minimapWidth * session.minimapWidth);
@@ -154,41 +351,23 @@ export function applyKeyframe(session, kf) {
   }
 
   session.ready = true;
+  session.lastDeltaAt = now;
 }
 
 export function applyDelta(session, delta) {
   if (!session.ready) return;
   const now = performance.now();
-
-  const seen = new Set();
-  for (const p of delta.players) {
-    seen.add(p.id);
-    const snapshot = {
-      x: p.x, y: p.y, d: p.d, color: p.color, name: p.name,
-      alive: p.alive, invincible: p.invincible, trail: p.trail,
-      deathT: p.deathT, invincibleT: p.invincibleT, emote: p.emote,
-    };
-    const existing = session.players.get(p.id);
-    if (existing) {
-      existing.prev = existing.curr;
-      existing.prevT = existing.currT;
-      existing.curr = snapshot;
-      existing.currT = now;
-    } else {
-      session.players.set(p.id, { prev: snapshot, curr: snapshot, prevT: now, currT: now });
-    }
-  }
-  for (const id of session.players.keys()) {
-    if (!seen.has(id)) session.players.delete(id);
-  }
+  if (!applyFullState(session, delta, now)) return;
+  applyPlayers(session, delta.players || [], now);
 
   if (session.tiles) {
-    for (const [x, y, color] of delta.tileDiffs) {
+    for (const [x, y, color, ageMs] of delta.tileDiffs || []) {
       const idx = x * session.gridSize + y;
       session.tiles[idx] = color;
-      session.tileFlash[idx] = now;
+      session.tileFlash[idx] = timestampFromAge(ageMs, now) || now;
     }
   }
+  applyTileAnimations(session, delta.tileAnimations, now);
 
   if (session.collisionBuffer && delta.collisionDiffs) {
     for (const [mx, my, val] of delta.collisionDiffs) {
@@ -206,15 +385,6 @@ export function applyDelta(session, delta) {
     }
   }
 
-  session.selfId = delta.selfId;
-  if (delta.hud) session.hud = delta.hud;
-  if (delta.leaderboard) session.leaderboard = delta.leaderboard;
-  if (delta.viewerSettings) session.viewerSettings = delta.viewerSettings;
-
-  if (delta.hud && delta.hud.respawnCooldownMs !== session.hud.respawnCooldownMs) {
-    session.respawnReceivedAt = delta.hud.respawnCooldownMs !== null ? now : null;
-  }
-
   const selfRec = session.players.get(delta.selfId);
   if (session.watchStartedAt === null && selfRec && selfRec.curr.alive) {
     session.watchStartedAt = now;
@@ -223,20 +393,19 @@ export function applyDelta(session, delta) {
     session.watchStartedAt = null; // reset so "time watching" restarts on respawn
   }
 
-  session.camera.pos = delta.cameraPos;
-  session.camera.widthDelta = delta.cameraWidthDelta;
-  session.camera.heightDelta = delta.cameraHeightDelta;
   session.lastDeltaAt = now;
 }
 
 // ─── Rendering ──────────────────────────────────────────────────────────────
 
 function resolveColor(session, raw) {
-  // Real game adjusts brightness per-viewer via activeColorPalette; we don't
-  // have that map here, so raw palette colors are drawn as-is. If you want
-  // viewer-local brightness adjustment, reuse window.TamState.activeColorPalette
-  // (it's a lookup keyed by these same raw strings) when available.
-  return raw;
+  const colors = session.renderSettings && session.renderSettings.colors;
+  if (raw === undefined || raw === null) return colors?.emptyCellColor || session.emptyCellColor;
+  if (colors?.DEFAULT_EMPTY_CELL_COLOR && raw === colors.DEFAULT_EMPTY_CELL_COLOR) {
+    return colors.emptyCellColor || session.emptyCellColor;
+  }
+  return (colors?.activeColorPalette && colors.activeColorPalette[raw]) ||
+    session.activeColorPalette[raw] || raw;
 }
 
 function lerp(a, b, t) { return a + (b - a) * t; }
@@ -256,42 +425,68 @@ export function renderFrame(canvas, session) {
     return;
   }
 
+  const geometry = session.renderSettings && session.renderSettings.geometry;
+  if (geometry && geometry.canvasWidth && geometry.canvasHeight &&
+      (canvas.width !== geometry.canvasWidth || canvas.height !== geometry.canvasHeight)) {
+    canvas.width = geometry.canvasWidth;
+    canvas.height = geometry.canvasHeight;
+  }
+  syncHostHud(session);
+
   const renderTime = performance.now() - INTERP_DELAY_MS;
   const { pos: cameraPos, widthDelta, heightDelta } = session.camera;
   const gridSize = session.gridSize;
+  const hostToggles = session.renderSettings && session.renderSettings.toggles;
+  const hostGeometry = session.renderSettings && session.renderSettings.geometry;
+  const hostZoom = hostToggles?.isCameraZoomEnabled
+    ? (hostGeometry?.cameraZoomFactor || 1)
+    : 1;
+  const tileRadiusX = Math.round(TILE_DRAW_RADIUS_X / hostZoom);
+  const tileRadiusY = Math.round(TILE_DRAW_RADIUS_Y / hostZoom);
 
-  const viewTilesX = widthDelta * 2 + 1;
-  const viewTilesY = heightDelta * 2 + 1;
+  const viewTilesX = tileRadiusX * 2 + 1;
+  const viewTilesY = tileRadiusY * 2 + 1;
   const scaleX = canvas.width / (viewTilesX * TILE_PX);
   const scaleY = canvas.height / (viewTilesY * TILE_PX);
 
   function worldToScreen(wx, wy) {
     return {
-      x: (wx - cameraPos[0] + widthDelta) * TILE_PX * scaleX,
-      y: (wy - cameraPos[1] + heightDelta) * TILE_PX * scaleY,
+      x: (wx - cameraPos[0] + tileRadiusX) * TILE_PX * scaleX,
+      y: (wy - cameraPos[1] + tileRadiusY) * TILE_PX * scaleY,
     };
   }
 
-  ctx.fillStyle = session.backgroundColor;
+  const colors = session.renderSettings && session.renderSettings.colors;
+  const toggles = session.renderSettings && session.renderSettings.toggles;
+  const snakeSize = geometry?.snakeSizeRatio ?? session.viewerSettings.snakeSizeRatio ?? 1;
+  const cellBgColor = colors?.cellBgColor || session.viewerSettings.cellBgColor || session.backgroundColor;
+  const emptyCellColor = colors?.emptyCellColor || session.viewerSettings.emptyCellColor || session.emptyCellColor;
+  ctx.fillStyle = snakeSize === 0 ? emptyCellColor : cellBgColor;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   // ── Tiles ──
-  const minX = Math.max(Math.floor(cameraPos[0] - widthDelta), 0);
-  const maxX = Math.min(Math.ceil(cameraPos[0] + widthDelta), gridSize - 1);
-  const minY = Math.max(Math.floor(cameraPos[1] - heightDelta), 0);
-  const maxY = Math.min(Math.ceil(cameraPos[1] + heightDelta), gridSize - 1);
+  const minX = Math.max(Math.floor(cameraPos[0] - tileRadiusX), 0);
+  const maxX = Math.min(Math.ceil(cameraPos[0] + tileRadiusX), gridSize - 1);
+  const minY = Math.max(Math.floor(cameraPos[1] - tileRadiusY), 0);
+  const maxY = Math.min(Math.ceil(cameraPos[1] + tileRadiusY), gridSize - 1);
 
   for (let gx = minX; gx <= maxX; gx++) {
     for (let gy = minY; gy <= maxY; gy++) {
       const idx = gx * gridSize + gy;
       const raw = session.tiles[idx];
-      const fill = raw === undefined ? session.emptyCellColor : resolveColor(session, raw);
+      const fill = raw === undefined ? emptyCellColor : resolveColor(session, raw);
       const { x: sx, y: sy } = worldToScreen(gx, gy);
       const w = TILE_PX * scaleX + 0.5; // slight overdraw hides seams between tiles
       const h = TILE_PX * scaleY + 0.5;
 
       ctx.fillStyle = fill;
-      ctx.fillRect(sx, sy, w, h);
+      if (snakeSize === 0) {
+        ctx.fillRect(sx, sy, w, h);
+      } else {
+        const px = snakeSize * scaleX;
+        const py = snakeSize * scaleY;
+        ctx.fillRect(sx + px, sy + py, Math.max(0, w - px * 2), Math.max(0, h - py * 2));
+      }
 
       const flashAt = session.tileFlash[idx];
       if (flashAt !== null) {
@@ -321,6 +516,7 @@ export function renderFrame(canvas, session) {
   drawBoundsList(ctx, session.bounds.lobby, worldToScreen, '#bbf');
   drawBoundsList(ctx, session.bounds.safe, worldToScreen, '#ff0');
   drawBoundsList(ctx, session.bounds.trail, worldToScreen, '#000');
+  drawPathfinding(ctx, session, worldToScreen);
 
   // ── Players ──
   for (const [id, rec] of session.players.entries()) {
@@ -329,26 +525,37 @@ export function renderFrame(canvas, session) {
 
   // ── Overlays (minimap, HUD, kill feed, respawn countdown, leaderboard) ──
   drawMinimap(ctx, canvas, session);
-  drawHud(ctx, session);
-  drawChatFeed(ctx, canvas, session);
+  if (!session.display) drawHud(ctx, session);
+  if (!session.display) drawChatFeed(ctx, canvas, session);
   drawRespawnCountdown(ctx, canvas, session);
-  drawLeaderboard(ctx, canvas, session);
+  if (!session.display) drawLeaderboard(ctx, canvas, session);
 }
 
 function drawMinimap(ctx, canvas, session) {
   if (!session.collisionBuffer || !session.minimapWidth) return;
 
   const mw = session.minimapWidth;
-  const size = Math.min(120, canvas.width * 0.18);
+  const geometry = session.renderSettings && session.renderSettings.geometry;
+  const backingStoreRatio = geometry?.backingStoreRatio || 1;
+  const resolutionMultiplier = geometry?.resolutionMultiplier || 1;
+  const mmScale = Math.max(Math.round(backingStoreRatio * resolutionMultiplier), 1);
+  const rawMmScale = Math.max(
+    Math.min(
+      backingStoreRatio * resolutionMultiplier * 200,
+      canvas.width / 2.5,
+      canvas.height / 2,
+      (canvas.width + canvas.height) / 7
+    ) / mw,
+    1
+  );
+  const size = mw * Math.round(rawMmScale);
   const cell = size / mw;
-  const margin = 10;
-  const ox = canvas.width - size - margin;
+  const margin = Math.round(5 * mmScale);
+  const ox = margin;
   const oy = margin;
 
   ctx.save();
-  ctx.globalAlpha = 0.85;
-  ctx.fillStyle = 'rgba(0,0,0,0.4)';
-  ctx.fillRect(ox - 2, oy - 2, size + 4, size + 4);
+  ctx.globalAlpha = 0.6;
 
   const selfRec = session.players.get(session.selfId);
   const ownColor = selfRec ? resolveColor(session, selfRec.curr.color) : '#fff';
@@ -361,17 +568,19 @@ function drawMinimap(ctx, canvas, session) {
     }
   }
 
-  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = ownColor;
+  ctx.lineWidth = mmScale;
   ctx.strokeRect(ox, oy, size, size);
 
   if (selfRec) {
-    const mx = (selfRec.curr.x / (session.gridSize - 1)) * size;
-    const my = (selfRec.curr.y / (session.gridSize - 1)) * size;
+    const markerSize = Math.max(4 * backingStoreRatio * resolutionMultiplier, 2);
+    const mx = markerSize + (selfRec.curr.x / (session.gridSize - 1)) * (size - 2 * markerSize);
+    const my = markerSize + (selfRec.curr.y / (session.gridSize - 1)) * (size - 2 * markerSize);
     ctx.beginPath();
-    ctx.arc(ox + mx, oy + my, 2.5, 0, 2 * Math.PI);
-    ctx.fillStyle = 'rgba(250,250,250,0.9)';
+    ctx.arc(ox + mx, oy + my, markerSize, 0, 2 * Math.PI);
+    ctx.fillStyle = 'rgba(250,250,250,0.7)';
     ctx.fill();
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -493,6 +702,29 @@ function drawBoundsList(ctx, list, worldToScreen, color) {
   }
 }
 
+function drawPathfinding(ctx, session, worldToScreen) {
+  if (!session.renderSettings?.toggles?.isPathfindingEnabled) return;
+  const paths = [];
+  if (session.pathfinding?.selfPath?.length) paths.push({ path: session.pathfinding.selfPath, color: '#fff' });
+  for (const item of session.pathfinding?.enemyPaths || []) {
+    if (item.path?.length) paths.push({ path: item.path, color: item.color || '#ff5555' });
+  }
+  ctx.save();
+  ctx.globalAlpha = .55;
+  ctx.lineWidth = 2;
+  for (const item of paths) {
+    ctx.beginPath();
+    item.path.forEach((point, index) => {
+      const screen = worldToScreen(point[0], point[1]);
+      if (index === 0) ctx.moveTo(screen.x, screen.y);
+      else ctx.lineTo(screen.x, screen.y);
+    });
+    ctx.strokeStyle = item.color;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, isSelf) {
   const p = rec.curr;
   let alpha = 1;
@@ -520,10 +752,15 @@ function drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, isSelf
     ctx.lineWidth = 5 * scaleX;
     ctx.strokeStyle = color;
     ctx.beginPath();
-    const start = worldToScreen(p.trail[0][0], p.trail[0][1]);
+    const points = p.trail.slice();
+    const tail = points[points.length - 1];
+    if (tail && p.x !== tail[0] && p.y !== tail[1]) {
+      points.push(p.d === 1 || p.d === 3 ? [p.x, tail[1]] : [tail[0], p.y]);
+    }
+    const start = worldToScreen(points[0][0], points[0][1]);
     ctx.moveTo(start.x, start.y);
-    for (let i = 1; i < p.trail.length; i++) {
-      const pt = worldToScreen(p.trail[i][0], p.trail[i][1]);
+    for (let i = 1; i < points.length; i++) {
+      const pt = worldToScreen(points[i][0], points[i][1]);
       ctx.lineTo(pt.x, pt.y);
     }
     const head = worldToScreen(wx, wy);
@@ -539,27 +776,27 @@ function drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, isSelf
   ctx.arc(dx, dy, r, 0, 2 * Math.PI);
   ctx.fillStyle = color;
   ctx.fill();
+  const gradient = ctx.createRadialGradient(dx, dy, 0, dx, dy, r * 1.2);
+  gradient.addColorStop(0, 'rgba(0,0,0,.1)');
+  gradient.addColorStop(1, 'rgba(0,0,0,.3)');
+  ctx.fillStyle = gradient;
+  ctx.fill();
   ctx.lineWidth = 2;
   ctx.strokeStyle = 'rgba(0,0,0,.5)';
   ctx.stroke();
+
+  if (isSelf && session.renderSettings?.toggles?.renderServerPosition && p.serverPosition) {
+    const server = worldToScreen(p.serverPosition[0], p.serverPosition[1]);
+    ctx.fillStyle = 'rgba(0,0,0,.2)';
+    ctx.beginPath();
+    ctx.arc(server.x, server.y, r, 0, 2 * Math.PI);
+    ctx.fill();
+  }
 
   // Highlight ring around the player being spectated, so it's easy to pick
   // them out of a crowd. Drawn just outside the head dot (and outside the
   // invincibility shield radius below) with a slow pulse so it stays
   // visible against any background/player color.
-  if (isSelf) {
-    const pulse = 0.7 + 0.3 * Math.sin(performance.now() / 250);
-    ctx.save();
-    ctx.globalAlpha = alpha * pulse;
-    ctx.beginPath();
-    ctx.arc(dx, dy, r + 5 * scaleX, 0, 2 * Math.PI);
-    ctx.strokeStyle = '#ffd23f';
-    ctx.lineWidth = 2 * scaleX;
-    ctx.setLineDash([4 * scaleX, 3 * scaleX]);
-    ctx.stroke();
-    ctx.restore();
-  }
-
   if (p.invincible && p.invincibleT != null) {
     const elapsed = performance.now() - p.invincibleT;
     if (elapsed <= INVINCIBLE_FADE_END_MS) {
@@ -571,15 +808,20 @@ function drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, isSelf
       ctx.globalAlpha = shieldAlpha;
       ctx.beginPath();
       ctx.arc(dx, dy, r, 0, 2 * Math.PI);
-      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-      ctx.lineWidth = 1.5 * scaleX;
+      const shield = ctx.createRadialGradient(dx, dy, 0, dx, dy, r);
+      shield.addColorStop(0, 'rgba(255,255,255,1)');
+      shield.addColorStop(1, 'rgba(255,255,255,.4)');
+      ctx.fillStyle = shield;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.3)';
+      ctx.lineWidth = .5 * scaleX;
       ctx.stroke();
       ctx.restore();
     }
   }
 
   // Name label
-  if (p.name) {
+  if (p.name && !isSelf && (session.renderSettings?.toggles?.showNames ?? session.viewerSettings.showNames !== false)) {
     ctx.globalAlpha = alpha;
     ctx.font = `${Math.max(10, 12 * scaleX)}px Rajdhani, sans-serif`;
     ctx.textAlign = 'center';

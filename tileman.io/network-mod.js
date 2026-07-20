@@ -41,7 +41,9 @@ import {
   ];
 
   const PING_INTERVAL_MS = 3000;
-  const DELTA_HZ = 12;                         // state ticks/sec sent to spectators
+  const DELTA_HZ = 24;                         // state ticks/sec sent to spectators (was 12 — the per-tick
+                                                // diff scan is sub-ms at documented gridSize ranges, so there
+                                                // was headroom; this was the real "why isn't it faster" cause)
   const KEYFRAME_RESYNC_MS = 8000;             // periodic full resync safety net
 
   let room = null;
@@ -307,6 +309,7 @@ import {
       },
       minimapWidth,
       collisionBuffer: collisionFlat,
+      leaderboard: T.getScoreboardData ? T.getScoreboardData() : [],
     }, { target: targetPeerId });
   }
 
@@ -403,6 +406,10 @@ import {
         // so we forward whatever their own client already displays.
         rank: T.getRank(),
       },
+      // Top-N leaderboard entries, read straight from TamState's own
+      // getScoreboardData() helper. Small array, sent in full each tick —
+      // not worth diffing.
+      leaderboard: T.getScoreboardData ? T.getScoreboardData() : [],
     };
 
     activeSpectators.forEach((peerId) => {

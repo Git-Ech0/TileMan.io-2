@@ -24,7 +24,10 @@
  */
 
 const TILE_PX = 10;
-const INTERP_DELAY_MS = 100; // render slightly "in the past" for smooth motion between ticks
+const INTERP_DELAY_MS = 60; // render slightly "in the past" for smooth motion between ticks
+                             // (was 100ms, sized for the old 12Hz/83ms tick gap; at 24Hz/~42ms
+                             // gap this stays safely above one tick's worth of jitter margin
+                             // while cutting perceived input lag)
 const CAPTURE_FLASH_MS = 400;
 const DEATH_FADE_MS = 1000;
 const INVINCIBLE_FADE_START_MS = 2000;
@@ -58,6 +61,8 @@ export function createSession() {
 
     chatFeed: [],           // [{ text, receivedAt }], newest last
     watchStartedAt: null,   // local performance.now() of first delta where selfId is alive
+
+    leaderboard: [],        // [{ rank, name, score, isSelf }], top-N as shown on the broadcaster's own screen
   };
 }
 
@@ -98,6 +103,7 @@ export function applyKeyframe(session, kf) {
   session.bounds = kf.bounds;
   session.minimapWidth = kf.minimapWidth || 0;
   session.collisionBuffer = kf.collisionBuffer ? kf.collisionBuffer.slice() : null;
+  session.leaderboard = kf.leaderboard || [];
   session.ready = true;
 }
 
@@ -153,6 +159,7 @@ export function applyDelta(session, delta) {
 
   session.selfId = delta.selfId;
   if (delta.hud) session.hud = delta.hud;
+  if (delta.leaderboard) session.leaderboard = delta.leaderboard;
 
   if (delta.hud && delta.hud.respawnCooldownMs !== session.hud.respawnCooldownMs) {
     session.respawnReceivedAt = delta.hud.respawnCooldownMs !== null ? now : null;
@@ -270,15 +277,16 @@ export function renderFrame(canvas, session) {
     drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, id === session.selfId);
   }
 
-  // ── Overlays (minimap, HUD, kill feed, respawn countdown) ──
+  // ── Overlays (minimap, HUD, kill feed, respawn countdown, leaderboard) ──
   drawMinimap(ctx, canvas, session);
   drawHud(ctx, session);
   drawChatFeed(ctx, canvas, session);
   drawRespawnCountdown(ctx, canvas, session);
+  drawLeaderboard(ctx, canvas, session);
 }
 
 function drawMinimap(ctx, canvas, session) {
-  if (!session.collisionBuffer || !session.minimapWidth || session.gridSize <= 50) return;
+  if (!session.collisionBuffer || !session.minimapWidth) return;
 
   const mw = session.minimapWidth;
   const size = Math.min(120, canvas.width * 0.18);
@@ -357,6 +365,38 @@ function formatSeconds(total) {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function drawLeaderboard(ctx, canvas, session) {
+  const entries = session.leaderboard;
+  if (!entries || entries.length === 0) return;
+
+  ctx.save();
+  ctx.font = '13px "JetBrains Mono", monospace';
+  const padding = 8;
+  const lineHeight = 18;
+  const boxWidth = 170;
+  const boxHeight = (entries.length + 1) * lineHeight + padding * 2;
+  const ox = canvas.width - boxWidth - 10;
+  // Sits below the minimap box (minimap is top-right; leave room for it).
+  const oy = 10 + Math.min(120, canvas.width * 0.18) + 20;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(ox, oy, boxWidth, boxHeight);
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('LEADERBOARD', ox + padding, oy + padding + lineHeight - 4);
+
+  entries.forEach((entry, i) => {
+    const y = oy + padding + lineHeight * (i + 2) - 4;
+    ctx.fillStyle = entry.isSelf ? '#ff5555' : '#fff';
+    ctx.fillText(`${entry.rank}. ${entry.name}`, ox + padding, y);
+    ctx.textAlign = 'right';
+    ctx.fillText(String(entry.score), ox + boxWidth - padding, y);
+    ctx.textAlign = 'left';
+  });
+  ctx.restore();
 }
 
 function drawChatFeed(ctx, canvas, session) {

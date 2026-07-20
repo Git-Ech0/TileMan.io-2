@@ -41,6 +41,8 @@ import {
   ];
 
   const PING_INTERVAL_MS = 3000;
+  const MAX_DELTA_HZ = 60;
+  const MIN_DELTA_FRAME_MS = 1000 / MAX_DELTA_HZ;
   const DELTA_HZ = 24;                         // state ticks/sec sent to spectators (was 12 — the per-tick
                                                 // diff scan is sub-ms at documented gridSize ranges, so there
                                                 // was headroom; this was the real "why isn't it faster" cause)
@@ -54,6 +56,8 @@ import {
   let spectatingPeerId = null;
   let spectatedMatchState = null;
   let broadcastTimer = null;
+  let lastBroadcastFrameAt = 0;
+  let broadcastSeq = 0;
   let lastKeyframeAt = 0;
   let lastKnownMatchState = null;
 
@@ -273,12 +277,36 @@ import {
     return flat;
   }
 
+  function clonePoint(point) {
+    return point ? [point[0], point[1]] : null;
+  }
+
+  function cloneTrail(trail) {
+    const out = [];
+    if (!trail) return out;
+    for (let i = 0; i < trail.length; i++) {
+      out.push([trail[i][0], trail[i][1]]);
+    }
+    return out;
+  }
+
+  function buildDisplaySnapshot() {
+    const T = window.TamState;
+    return T?.getDisplaySnapshot ? T.getDisplaySnapshot() : null;
+  }
+
+  function buildPathfindingSnapshot() {
+    const T = window.TamState;
+    return T?.getPathfindingSnapshot ? T.getPathfindingSnapshot() : { selfPath: [], enemyPaths: [] };
+  }
+
   // The broadcaster's own personal render preferences — these live purely
   // client-side in hra_min.js and were never sent anywhere before now, so a
   // spectator's view could never actually match what the broadcaster sees.
   // Small primitives, cheap to send every tick alongside everything else.
   function buildViewerSettings() {
     const T = window.TamState;
+    if (T?.getRenderSettings) return T.getRenderSettings();
     return {
       snakeSizeRatio: T.snakeSizeRatio,
       isCameraZoomEnabled: T.isCameraZoomEnabled,
@@ -289,6 +317,8 @@ import {
       cellBgColor: T.cellBgColor,
       projectionShadowColor: T.projectionShadowColor,
       customSkinsEnabled: T.customSkinsEnabled,
+      showNames: T.showNames,
+      renderServerPosition: T.renderServerPosition,
     };
   }
 
@@ -340,21 +370,65 @@ import {
   }
 
   function buildPlayerDeltaPayload() {
-    return window.TamState.players.map(function (p) {
+    const T = window.TamState;
+    const now = performance.now();
+    if (T.getRenderPlayers) {
+      return T.getRenderPlayers().map(function (p) {
+        return {
+          id: p.id,
+          x: p.pos ? p.pos[0] : 0,
+          y: p.pos ? p.pos[1] : 0,
+          pos: p.pos,
+          d: p.d,
+          color: p.c,
+          name: p.na,
+          trail: p.trs || [],
+          isLocal: p.m,
+          alive: p.deAgeMs === null,
+          deathAgeMs: p.deAgeMs,
+          invincible: p.ntAgeMs !== null,
+          invincibleAgeMs: p.ntAgeMs,
+          emote: p.bAgeMs !== null ? { type: p.bt, ageMs: p.bAgeMs } : null,
+          serverPosition: p.serPos,
+          serverDirection: p.serD,
+          setAgeMs: p.setAgeMs,
+        };
+      });
+    }
+    return T.players.map(function (p) {
       return {
         id: p.id,
         x: p.pos[0], y: p.pos[1],
+        pos: clonePoint(p.pos),
         d: p.d,
         color: p.c,
         name: p.na,
-        trail: p.trs,
+        trail: cloneTrail(p.trs),
+        isLocal: !!p.m,
         alive: p.de === null,
-        deathT: p.de,
+        deathAgeMs: p.de === null ? null : now - p.de,
         invincible: p.nt !== null,
-        invincibleT: p.nt,
-        emote: p.b !== null ? { type: p.bt, t: p.b } : null,
+        invincibleAgeMs: p.nt === null ? null : now - p.nt,
+        emote: p.b !== null ? { type: p.bt, ageMs: now - p.b } : null,
+        serverPosition: clonePoint(p.serPos),
+        serverDirection: typeof p.serD === 'undefined' ? null : p.serD,
+        setAgeMs: p.setTime === null || typeof p.setTime === 'undefined' ? null : now - p.setTime,
       };
     });
+  }
+
+  function buildHudPayload() {
+    const T = window.TamState;
+    return {
+      finalScore: T.finalScore,
+      totalKills: T.totalKills,
+      pointScaleFactor: T.pointScaleFactor,
+      killsComboCounter: T.killsComboCounter,
+      capturedComboCounter: T.capturedComboCounter,
+      respawnCooldownMs: T.respawnCooldownMs,
+      rank: T.getRank(),
+      stats: T.getStats ? T.getStats() : null,
+    };
   }
 
   function broadcastDelta() {

@@ -274,6 +274,21 @@ function syncElementSnapshot(layer, id, snapshot) {
   element.className = snapshot.className || '';
   if (snapshot.style) element.setAttribute('style', snapshot.style);
   if (snapshot.display === 'none') element.style.display = 'none';
+  applyHostTypography(element, snapshot);
+}
+
+function applyHostTypography(element, snapshot) {
+  if (!snapshot) return;
+  for (const [property, value] of Object.entries({
+    fontSize: snapshot.fontSize,
+    fontFamily: snapshot.fontFamily,
+    fontWeight: snapshot.fontWeight,
+    letterSpacing: snapshot.letterSpacing,
+    lineHeight: snapshot.lineHeight,
+    textAlign: snapshot.textAlign,
+  })) {
+    if (value) element.style[property] = value;
+  }
 }
 
 function syncHostHud(session) {
@@ -294,6 +309,7 @@ function syncHostHud(session) {
       element.innerHTML = hud[key].html || '';
       element.className = hud[key].className || '';
       if (hud[key].style) element.setAttribute('style', hud[key].style);
+      applyHostTypography(element, hud[key]);
     }
   }
   for (const key of groups.performance_stats) {
@@ -302,6 +318,7 @@ function syncHostHud(session) {
       element.innerHTML = hud[key].html || '';
       element.className = hud[key].className || '';
       if (hud[key].style) element.setAttribute('style', hud[key].style);
+      applyHostTypography(element, hud[key]);
     }
   }
   const allHudIds = {
@@ -317,6 +334,7 @@ function syncHostHud(session) {
     element.innerHTML = hud[key].html || '';
     element.className = hud[key].className || '';
     if (hud[key].style) element.setAttribute('style', hud[key].style);
+    applyHostTypography(element, hud[key]);
   }
   syncElementSnapshot(layer, 'timer', display.timer);
   syncElementSnapshot(layer, 'title', display.title);
@@ -337,6 +355,7 @@ function syncHostHud(session) {
       element.innerHTML = snapshot.html || '';
       element.className = snapshot.className || '';
       if (snapshot.style) element.setAttribute('style', snapshot.style);
+      applyHostTypography(element, snapshot);
     }
   }
 }

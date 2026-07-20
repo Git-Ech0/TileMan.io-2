@@ -161,7 +161,7 @@ import {
       if (spectatingPeerId !== peerId || !spectatorSession) return;
       if (payload.type === 'keyframe') {
         applyKeyframe(spectatorSession, payload);
-      } else if (payload.type === 'delta' && spectatedMatchState === 'MATCH') {
+      } else if (payload.type === 'delta') {
         applyDelta(spectatorSession, payload);
       }
     };
@@ -228,20 +228,32 @@ import {
   }
 
   function handleStreamingService() {
-    const shouldStream = activeSpectators.size > 0 && getLocalMatchState() === 'MATCH';
+    const localMatchState = getLocalMatchState();
+    const shouldStream = activeSpectators.size > 0 &&
+      (localMatchState === 'MATCH' || localMatchState === 'DEAD');
 
     if (shouldStream && !broadcastTimer) {
-      const interval = Math.round(1000 / DELTA_HZ);
       lastKeyframeAt = performance.now();
-      broadcastTimer = setInterval(broadcastDelta, interval);
+      lastBroadcastFrameAt = 0;
+      activeSpectators.forEach((peerId) => sendKeyframe(peerId));
+      broadcastTimer = requestAnimationFrame(broadcastPump);
     } else if (!shouldStream && broadcastTimer) {
-      clearInterval(broadcastTimer);
+      cancelAnimationFrame(broadcastTimer);
       broadcastTimer = null;
       // Force a fresh keyframe basis next time we start streaming.
       gridShadow = null;
       collisionShadow = null;
       lastChatSnapshot = [];
     }
+  }
+
+  function broadcastPump(now) {
+    if (!broadcastTimer) return;
+    if (now - lastBroadcastFrameAt >= MIN_DELTA_FRAME_MS) {
+      lastBroadcastFrameAt = now;
+      broadcastDelta();
+    }
+    if (broadcastTimer) broadcastTimer = requestAnimationFrame(broadcastPump);
   }
 
   // ─── Grid RLE encode (broadcaster side) ────────────────────────────────
@@ -324,7 +336,8 @@ import {
 
   function sendKeyframe(targetPeerId) {
     const T = window.TamState;
-    if (!T || getLocalMatchState() !== 'MATCH') return;
+    const matchState = getLocalMatchState();
+    if (!T || matchState === 'LOBBY' || !T.gridMatrix || !T.gridSize) return;
 
     const gridSize = T.gridSize;
     gridShadow = new Array(gridSize * gridSize);
@@ -339,23 +352,29 @@ import {
     const collisionFlat = encodeCollisionBuffer(T.collisionBuffer, minimapWidth);
     collisionShadow = collisionFlat.slice();
     lastChatSnapshot = (T.chatLog || []).slice();
+    const viewerSettings = buildViewerSettings();
 
     syncAction.send({
       type: 'keyframe',
+      schema: 2,
+      sequence: ++broadcastSeq,
+      sentAt: performance.now(),
+      matchState,
       gridSize,
       tiles: encodeGridRLE(grid, gridSize),
-      colorPalette: T.colorPalette,
+      tileAnimations: T.getTileAnimationSnapshot ? T.getTileAnimationSnapshot() : [],
+      colorPalette: viewerSettings?.colors?.colorPalette || T.colorPalette,
       // Raw colorPalette entries are unadjusted hex; activeColorPalette maps
       // each to what the broadcaster's own client actually paints with,
       // after their brightness/contrast preference is applied. Both
       // renderActiveGrid() and drawPlayer() key off activeColorPalette,
       // not colorPalette, so this is the one that actually matters visually.
-      activeColorPalette: T.activeColorPalette,
+      activeColorPalette: viewerSettings?.colors?.activeColorPalette || T.activeColorPalette,
       // TamState doesn't expose a live emptyCellColor getter (it's derived
       // from each viewer's own 'bgem' localStorage setting), so we send the
       // documented default and let the spectator apply their own theme.
-      emptyCellColor: '#666666',
-      backgroundColor: '#333333',
+      emptyCellColor: viewerSettings?.colors?.emptyCellColor || T.emptyCellColor || '#666666',
+      backgroundColor: viewerSettings?.colors?.cellBgColor || T.cellBgColor || '#333333',
       arenaSetting: T.serverArenaSetting,
       bounds: {
         lobby: T.lobbyBoundsList || [],
@@ -364,8 +383,17 @@ import {
       },
       minimapWidth,
       collisionBuffer: collisionFlat,
+      players: buildPlayerDeltaPayload(),
+      selfId: T.getSelfId(),
+      cameraPos: clonePoint(T.cameraPos),
+      cameraWidthDelta: T.cameraWidthDelta,
+      cameraHeightDelta: T.cameraHeightDelta,
+      hud: buildHudPayload(),
       leaderboard: T.getScoreboardData ? T.getScoreboardData() : [],
-      viewerSettings: buildViewerSettings(),
+      display: buildDisplaySnapshot(),
+      pathfinding: buildPathfindingSnapshot(),
+      viewerSettings,
+      renderSettings: viewerSettings,
     }, { target: targetPeerId });
   }
 
@@ -433,7 +461,8 @@ import {
 
   function broadcastDelta() {
     const T = window.TamState;
-    if (!T || getLocalMatchState() !== 'MATCH') {
+    const matchState = getLocalMatchState();
+    if (!T || matchState === 'LOBBY') {
       handleStreamingService();
       return;
     }
@@ -447,6 +476,7 @@ import {
       activeSpectators.forEach((peerId) => sendKeyframe(peerId));
     }
 
+    const now = performance.now();
     const gridSize = T.gridSize;
     const grid = T.gridMatrix;
     const tileDiffs = [];
@@ -455,9 +485,10 @@ import {
         const col = grid[x];
         for (let y = 0; y < gridSize; y++) {
           const idx = x * gridSize + y;
-          const c = col[y].c;
+          const cell = col[y];
+          const c = cell.c;
           if (gridShadow[idx] !== c) {
-            tileDiffs.push([x, y, c]);
+            tileDiffs.push([x, y, c, cell.t === null ? null : Math.max(0, now - cell.t)]);
             gridShadow[idx] = c;
           }
         }
@@ -486,12 +517,17 @@ import {
 
     const payload = {
       type: 'delta',
+      schema: 2,
+      sequence: ++broadcastSeq,
+      sentAt: now,
+      matchState,
       selfId: T.getSelfId(),
       players: buildPlayerDeltaPayload(),
       tileDiffs,
       collisionDiffs,
       newChatMessages,
-      cameraPos: T.cameraPos,
+      tileAnimations: T.getTileAnimationSnapshot ? T.getTileAnimationSnapshot() : [],
+      cameraPos: clonePoint(T.cameraPos),
       cameraWidthDelta: T.cameraWidthDelta,
       cameraHeightDelta: T.cameraHeightDelta,
       hud: {
@@ -505,12 +541,16 @@ import {
         // is the one HUD value we genuinely can't compute from raw state,
         // so we forward whatever their own client already displays.
         rank: T.getRank(),
+        stats: T.getStats ? T.getStats() : null,
       },
       // Top-N leaderboard entries, read straight from TamState's own
       // getScoreboardData() helper. Small array, sent in full each tick —
       // not worth diffing.
       leaderboard: T.getScoreboardData ? T.getScoreboardData() : [],
+      display: buildDisplaySnapshot(),
+      pathfinding: buildPathfindingSnapshot(),
       viewerSettings: buildViewerSettings(),
+      renderSettings: buildViewerSettings(),
     };
 
     activeSpectators.forEach((peerId) => {
@@ -563,7 +603,7 @@ import {
         btn.onclick = exitSpectatorView;
       } else {
         btn.textContent = 'SPECTATE';
-        if (data.matchState !== 'MATCH') {
+        if (data.matchState === 'LOBBY') {
           btn.disabled = true;
           btn.style.opacity = '0.4';
           btn.style.cursor = 'not-allowed';
@@ -580,12 +620,12 @@ import {
 
   function startSpectating(peerId) {
     const data = playerRegistry.get(peerId);
-    if (!data || data.matchState !== 'MATCH') return;
+    if (!data || data.matchState === 'LOBBY') return;
 
     if (spectatingPeerId) exitSpectatorView();
 
     spectatingPeerId = peerId;
-    spectatedMatchState = 'MATCH';
+    spectatedMatchState = data.matchState;
     spectatorSession = createSession();
     subscribeAction.send(null, { target: peerId });
 
@@ -606,6 +646,8 @@ import {
     if (!notice) return;
 
     if (matchState === 'DEAD') {
+      notice.style.display = 'none';
+      return;
       notice.textContent = 'Player died — waiting for them to respawn...';
       notice.style.display = 'block';
     } else if (matchState === 'LOBBY') {

@@ -1,26 +1,37 @@
 /**
- * TileMan.io Cross-Server Spectator Mod (Trystero edition)
- * Uses Trystero for serverless WebRTC peer discovery/signaling — replaces
- * the previous PeerJS + public 0.peerjs.com broker + manual slot system.
- * Trystero's default strategy (Nostr) uses hundreds of public relays only
- * to exchange the initial handshake; actual gameplay data still goes
- * directly peer-to-peer, same as before.
+ * TileMan.io Cross-Server Spectator Mod (Trystero edition) — State-Sync
+ *
+ * Same P2P transport as before (Trystero / WebRTC, no signaling server
+ * beyond the public relays used for the initial handshake). What changed
+ * is *what* gets sent to a spectator and *how* it becomes pixels:
+ *
+ *   OLD: capture the broadcaster's <canvas> to a webp blob every frame,
+ *        ship the image, spectator just displays it in an <img>.
+ *   NEW: ship the broadcaster's game *state* (from window.TamState) —
+ *        players, tile grid, camera — and let the spectator's own client
+ *        redraw it locally. Cheaper, resolution-independent, and each
+ *        spectator's view is reconstructed from data rather than mirrored
+ *        video.
+ *
+ * The player registry / sub / unsub / ping machinery is unchanged; only
+ * the payload that flows over what used to be `frameAction` changed, plus
+ * the spectator view element itself is now a <canvas> instead of an <img>.
  */
 
 import { joinRoom } from 'https://esm.run/trystero';
+import {
+  createSession, destroySession, applyKeyframe, applyDelta, startRenderLoop,
+} from './spectator-renderer.js';
 
 (function () {
-  // Pick something genuinely unique to this app/deployment.
   const APP_ID = 'tileman-io-p2p-spectator-v3';
   const ROOM_ID = 'global';
 
   // TURN relay fallback for peer pairs that can't establish a direct WebRTC
-  // connection (symmetric NAT, restrictive firewalls, etc). Without this,
-  // those pairs fail outright and never recover on their own. Fill in
+  // connection (symmetric NAT, restrictive firewalls, etc). Fill in
   // credentials from a TURN provider — e.g. Cloudflare Calls TURN (free
   // tier, https://developers.cloudflare.com/calls/turn/) or Open Relay
-  // (https://www.metered.ca/tools/openrelay/). Leave the array empty to
-  // fall back to STUN-only (direct-connection-only) behavior.
+  // (https://www.metered.ca/tools/openrelay/). Leave empty for STUN-only.
   const TURN_SERVERS = [
     // {
     //   urls: 'turn:your-turn-server.example:3478',
@@ -29,23 +40,42 @@ import { joinRoom } from 'https://esm.run/trystero';
     // }
   ];
 
-  const BROADCAST_FPS = 30;
   const PING_INTERVAL_MS = 3000;
-  const TARGET_STREAM_WIDTH = 1200;
+  const DELTA_HZ = 12;                         // state ticks/sec sent to spectators
+  const KEYFRAME_RESYNC_MS = 8000;             // periodic full resync safety net
 
   let room = null;
-  let pingAction, subscribeAction, unsubscribeAction, frameAction;
+  let pingAction, subscribeAction, unsubscribeAction, syncAction;
 
   const playerRegistry = new Map();   // peerId -> { username, region, mode, matchState, lastSeen, allowSpectating }
-  const activeSpectators = new Set(); // peerIds currently watching our stream
+  const activeSpectators = new Set(); // peerIds currently watching our state
   let spectatingPeerId = null;
-  let spectatedMatchState = null;     // last known state of whoever we're currently spectating
+  let spectatedMatchState = null;
   let broadcastTimer = null;
-  let lastKnownMatchState = null;     // our own LOBBY / MATCH / DEAD, used to detect transitions fast
+  let lastKeyframeAt = 0;
+  let lastKnownMatchState = null;
 
-  // Rescaling offscreen context canvas to avoid bandwidth blowups
-  const scaleCanvas = document.createElement('canvas');
-  const scaleCtx = scaleCanvas.getContext('2d');
+  // Broadcaster-side mirror of the grid, used purely to diff against the
+  // live gridMatrix each tick so we only send cells that actually changed.
+  let gridShadow = null; // flat array, gridShadow[x * gridSize + y] = color
+
+  // Same idea for the minimap collision buffer (boolean[][] -> flat array).
+  let collisionShadow = null;
+
+  // Best-effort kill/capture feed forwarding. window.TamState.chatLog is a
+  // drain queue (hra.min.js does chatLog.shift() to show one toast every
+  // ~4.1s minimum), not an append-only log — so we can't just read it once.
+  // Instead we snapshot it every delta tick and treat any *new* entries
+  // since the last snapshot as messages to forward. Because the queue only
+  // drains one entry per ~4.1s and we poll far more often than that, we'll
+  // reliably see new entries before they're shifted out in the common case.
+  // Edge case: if more than one entry is pushed and then shifted within a
+  // single tick window, only the newest survives detection here.
+  let lastChatSnapshot = [];
+
+  // Spectator-side render session (created fresh each time we start watching someone)
+  let spectatorSession = null;
+  let stopRenderLoop = null;
 
   function initializeMod() {
     const roomConfig = { appId: APP_ID };
@@ -62,7 +92,7 @@ import { joinRoom } from 'https://esm.run/trystero';
     pingAction = room.makeAction('ping');
     subscribeAction = room.makeAction('sub');
     unsubscribeAction = room.makeAction('unsub');
-    frameAction = room.makeAction('frame');
+    syncAction = room.makeAction('sync'); // carries { type: 'keyframe' | 'delta', ... }
 
     room.onPeerJoin = (peerId) => {
       sendStatePing(peerId);
@@ -92,8 +122,6 @@ import { joinRoom } from 'https://esm.run/trystero';
       });
       updateUI();
 
-      // If we're actively watching this peer, react to their state changing
-      // right away instead of waiting to notice frames stopped arriving.
       if (spectatingPeerId === peerId && (!previous || previous.matchState !== matchState)) {
         handleSpectatedStateChange(matchState);
       }
@@ -102,15 +130,17 @@ import { joinRoom } from 'https://esm.run/trystero';
     subscribeAction.onMessage = (_, { peerId }) => {
       if (window.TamState?.allowSpectating === false) return; // Reject incoming viewer
       activeSpectators.add(peerId);
+      // Bring the new spectator up to date immediately; they can't apply
+      // deltas meaningfully until they have a full keyframe to start from.
+      sendKeyframe(peerId);
       handleStreamingService();
     };
 
     window.addEventListener('spectateSettingChanged', (e) => {
       const isAllowed = e.detail;
       broadcastState();
-      
+
       if (!isAllowed) {
-        // Kick anyone currently watching if toggled off mid-match
         activeSpectators.clear();
         handleStreamingService();
       }
@@ -121,19 +151,17 @@ import { joinRoom } from 'https://esm.run/trystero';
       handleStreamingService();
     };
 
-    frameAction.onMessage = (blobData, { peerId }) => {
-      if (spectatingPeerId === peerId && spectatedMatchState === 'MATCH') {
-        const renderView = document.getElementById('spectator-render-view');
-        if (renderView) renderView.src = URL.createObjectURL(new Blob([blobData]));
+    syncAction.onMessage = (payload, { peerId }) => {
+      if (spectatingPeerId !== peerId || !spectatorSession) return;
+      if (payload.type === 'keyframe') {
+        applyKeyframe(spectatorSession, payload);
+      } else if (payload.type === 'delta' && spectatedMatchState === 'MATCH') {
+        applyDelta(spectatorSession, payload);
       }
     };
 
     setInterval(broadcastState, PING_INTERVAL_MS);
 
-    // Separate, much faster poll purely to catch our own match-state
-    // transitions (MATCH -> DEAD -> LOBBY -> MATCH ...) and push them out
-    // immediately, so anyone spectating us doesn't sit on a stale frame
-    // for up to PING_INTERVAL_MS before finding out we died.
     setInterval(() => {
       const state = getLocalMatchState();
       if (state !== lastKnownMatchState) {
@@ -143,18 +171,32 @@ import { joinRoom } from 'https://esm.run/trystero';
       }
     }, 250);
 
+    ensureSpectatorCanvas();
     const closeBtn = document.getElementById('spectator-close-btn');
     if (closeBtn) closeBtn.onclick = exitSpectatorView;
 
     updateUI();
   }
 
-  // Single source of truth for our own state, reused by currentState(),
-  // handleStreamingService(), and captureAndDistributeFrame() so they can
-  // never disagree with each other.
-  //   LOBBY - not in a match (menu, or left after dying)
-  //   MATCH - actually alive and playing, canvas is showing live gameplay
-  //   DEAD  - died and is sitting on the game-over/death screen
+  // hra.min.js creates #spectator-render-view as an <img>; swap it for a
+  // <canvas> at runtime so we never have to touch that file. Keeps this mod
+  // fully self-contained and safe against upstream hra.min.js updates.
+  function ensureSpectatorCanvas() {
+    const existing = document.getElementById('spectator-render-view');
+    if (existing && existing.tagName === 'CANVAS') return;
+
+    const canvas = document.createElement('canvas');
+    canvas.id = 'spectator-render-view';
+    canvas.width = 1200;
+    canvas.height = 675;
+    if (existing) {
+      existing.replaceWith(canvas);
+    } else {
+      const overlay = document.getElementById('spectator-overlay');
+      if (overlay) overlay.appendChild(canvas);
+    }
+  }
+
   function getLocalMatchState() {
     if (!window.TamState?.isGameActive) return 'LOBBY';
     if (window.TamState?.isGameOverScreenActive) return 'DEAD';
@@ -183,41 +225,189 @@ import { joinRoom } from 'https://esm.run/trystero';
     const shouldStream = activeSpectators.size > 0 && getLocalMatchState() === 'MATCH';
 
     if (shouldStream && !broadcastTimer) {
-      const interval = Math.round(1000 / BROADCAST_FPS);
-      broadcastTimer = setInterval(captureAndDistributeFrame, interval);
+      const interval = Math.round(1000 / DELTA_HZ);
+      lastKeyframeAt = performance.now();
+      broadcastTimer = setInterval(broadcastDelta, interval);
     } else if (!shouldStream && broadcastTimer) {
       clearInterval(broadcastTimer);
       broadcastTimer = null;
+      // Force a fresh keyframe basis next time we start streaming.
+      gridShadow = null;
+      collisionShadow = null;
+      lastChatSnapshot = [];
     }
   }
 
-  function captureAndDistributeFrame() {
-    const canvas = document.getElementById('canvas');
-    if (!canvas || getLocalMatchState() !== 'MATCH') {
+  // ─── Grid RLE encode (broadcaster side) ────────────────────────────────
+  // Flat [color, runLength, ...] scanned column-major (x outer, y inner),
+  // matching gridMatrix[x][y] access order. Mirrors decodeGridRLE() in
+  // spectator-renderer.js.
+  function encodeGridRLE(gridMatrix, gridSize) {
+    const runs = [];
+    for (let x = 0; x < gridSize; x++) {
+      const col = gridMatrix[x];
+      let y = 0;
+      while (y < gridSize) {
+        const color = col[y].c;
+        let len = 1;
+        while (y + len < gridSize && col[y + len].c === color) len++;
+        runs.push(color, len);
+        y += len;
+      }
+    }
+    return runs;
+  }
+
+  function encodeCollisionBuffer(collisionBuffer, minimapWidth) {
+    const flat = new Array(minimapWidth * minimapWidth).fill(0);
+    if (!collisionBuffer) return flat;
+    for (let mx = 0; mx < minimapWidth; mx++) {
+      const col = collisionBuffer[mx];
+      if (!col) continue;
+      for (let my = 0; my < minimapWidth; my++) {
+        if (col[my]) flat[mx * minimapWidth + my] = 1;
+      }
+    }
+    return flat;
+  }
+
+  function sendKeyframe(targetPeerId) {
+    const T = window.TamState;
+    if (!T || getLocalMatchState() !== 'MATCH') return;
+
+    const gridSize = T.gridSize;
+    gridShadow = new Array(gridSize * gridSize);
+    const grid = T.gridMatrix;
+    for (let x = 0; x < gridSize; x++) {
+      for (let y = 0; y < gridSize; y++) {
+        gridShadow[x * gridSize + y] = grid[x][y].c;
+      }
+    }
+
+    const minimapWidth = T.minimapWidth || 0;
+    const collisionFlat = encodeCollisionBuffer(T.collisionBuffer, minimapWidth);
+    collisionShadow = collisionFlat.slice();
+    lastChatSnapshot = (T.chatLog || []).slice();
+
+    syncAction.send({
+      type: 'keyframe',
+      gridSize,
+      tiles: encodeGridRLE(grid, gridSize),
+      colorPalette: T.colorPalette,
+      // TamState doesn't expose a live emptyCellColor getter (it's derived
+      // from each viewer's own 'bgem' localStorage setting), so we send the
+      // documented default and let the spectator apply their own theme.
+      emptyCellColor: '#666666',
+      backgroundColor: '#333333',
+      arenaSetting: T.serverArenaSetting,
+      bounds: {
+        lobby: T.lobbyBoundsList || [],
+        safe: T.safeZoneBounds || [],
+        trail: T.trailBoundsList || [],
+      },
+      minimapWidth,
+      collisionBuffer: collisionFlat,
+    }, { target: targetPeerId });
+  }
+
+  function buildPlayerDeltaPayload() {
+    return window.TamState.players.map(function (p) {
+      return {
+        id: p.id,
+        x: p.pos[0], y: p.pos[1],
+        d: p.d,
+        color: p.c,
+        name: p.na,
+        trail: p.trs,
+        alive: p.de === null,
+        deathT: p.de,
+        invincible: p.nt !== null,
+        invincibleT: p.nt,
+        emote: p.b !== null ? { type: p.bt, t: p.b } : null,
+      };
+    });
+  }
+
+  function broadcastDelta() {
+    const T = window.TamState;
+    if (!T || getLocalMatchState() !== 'MATCH') {
       handleStreamingService();
       return;
     }
 
-    try {
-      const ratio = TARGET_STREAM_WIDTH / canvas.width;
-      let sourceCanvas = canvas;
-
-      if (ratio < 1) {
-        scaleCanvas.width = TARGET_STREAM_WIDTH;
-        scaleCanvas.height = canvas.height * ratio;
-        scaleCtx.drawImage(canvas, 0, 0, scaleCanvas.width, scaleCanvas.height);
-        sourceCanvas = scaleCanvas;
-      }
-
-      sourceCanvas.toBlob((blob) => {
-        if (!blob) return;
-        activeSpectators.forEach((peerId) => {
-          frameAction.send(blob, { target: peerId });
-        });
-      }, 'image/webp', 0.8);
-    } catch (e) {
-      console.error('Frame processing failure: ', e);
+    // Periodic full resync in case a spectator's delta stream ever drifts
+    // (e.g. reconnect edge cases) — cheap insurance, not required for
+    // correctness in the common case since every active spectator already
+    // received an initial keyframe on subscribe.
+    if (performance.now() - lastKeyframeAt > KEYFRAME_RESYNC_MS) {
+      lastKeyframeAt = performance.now();
+      activeSpectators.forEach((peerId) => sendKeyframe(peerId));
     }
+
+    const gridSize = T.gridSize;
+    const grid = T.gridMatrix;
+    const tileDiffs = [];
+    if (gridShadow) {
+      for (let x = 0; x < gridSize; x++) {
+        const col = grid[x];
+        for (let y = 0; y < gridSize; y++) {
+          const idx = x * gridSize + y;
+          const c = col[y].c;
+          if (gridShadow[idx] !== c) {
+            tileDiffs.push([x, y, c]);
+            gridShadow[idx] = c;
+          }
+        }
+      }
+    }
+
+    const minimapWidth = T.minimapWidth || 0;
+    const collisionDiffs = [];
+    if (collisionShadow && minimapWidth) {
+      const flat = encodeCollisionBuffer(T.collisionBuffer, minimapWidth);
+      for (let i = 0; i < flat.length; i++) {
+        if (collisionShadow[i] !== flat[i]) {
+          collisionDiffs.push([Math.floor(i / minimapWidth), i % minimapWidth, flat[i]]);
+          collisionShadow[i] = flat[i];
+        }
+      }
+    }
+
+    // Best-effort new-message detection — see the comment on lastChatSnapshot
+    // near the top of this file for why this is a heuristic, not exact.
+    const currentChat = (T.chatLog || []).slice();
+    const newChatMessages = currentChat.length > lastChatSnapshot.length
+      ? currentChat.slice(lastChatSnapshot.length)
+      : [];
+    lastChatSnapshot = currentChat;
+
+    const payload = {
+      type: 'delta',
+      selfId: T.getSelfId(),
+      players: buildPlayerDeltaPayload(),
+      tileDiffs,
+      collisionDiffs,
+      newChatMessages,
+      cameraPos: T.cameraPos,
+      cameraWidthDelta: T.cameraWidthDelta,
+      cameraHeightDelta: T.cameraHeightDelta,
+      hud: {
+        finalScore: T.finalScore,
+        totalKills: T.totalKills,
+        pointScaleFactor: T.pointScaleFactor,
+        killsComboCounter: T.killsComboCounter,
+        capturedComboCounter: T.capturedComboCounter,
+        respawnCooldownMs: T.respawnCooldownMs,
+        // getRank() reads the broadcaster's own leaderboard DOM entry — this
+        // is the one HUD value we genuinely can't compute from raw state,
+        // so we forward whatever their own client already displays.
+        rank: T.getRank(),
+      },
+    };
+
+    activeSpectators.forEach((peerId) => {
+      syncAction.send(payload, { target: peerId });
+    });
   }
 
   function updateUI() {
@@ -226,7 +416,6 @@ import { joinRoom } from 'https://esm.run/trystero';
 
     list.innerHTML = '';
 
-    // Filter registry to only include peers who allow spectating
     const visiblePeers = [];
     playerRegistry.forEach((data, peerId) => {
       if (data.allowSpectating) {
@@ -283,43 +472,38 @@ import { joinRoom } from 'https://esm.run/trystero';
 
   function startSpectating(peerId) {
     const data = playerRegistry.get(peerId);
-    if (!data || data.matchState !== 'MATCH') return; // can't spectate someone who isn't live
+    if (!data || data.matchState !== 'MATCH') return;
 
     if (spectatingPeerId) exitSpectatorView();
 
     spectatingPeerId = peerId;
     spectatedMatchState = 'MATCH';
+    spectatorSession = createSession();
     subscribeAction.send(null, { target: peerId });
 
     const notice = document.getElementById('spectator-death-notice');
     if (notice) notice.style.display = 'none';
 
+    ensureSpectatorCanvas();
+    const canvas = document.getElementById('spectator-render-view');
     document.getElementById('spectator-overlay').style.display = 'flex';
     document.body.classList.add('spectating-active');
+    stopRenderLoop = startRenderLoop(canvas, spectatorSession);
     updateUI();
   }
 
-  // Called when a state update arrives for the peer we're currently
-  // watching. Doesn't tear down the subscription — we stay subscribed so
-  // that if/when they respawn, frames just start flowing again on their
-  // own and the view resumes automatically.
   function handleSpectatedStateChange(matchState) {
     spectatedMatchState = matchState;
-    const view = document.getElementById('spectator-render-view');
     const notice = document.getElementById('spectator-death-notice');
     if (!notice) return;
 
     if (matchState === 'DEAD') {
-      if (view) view.removeAttribute('src');
       notice.textContent = 'Player died — waiting for them to respawn...';
       notice.style.display = 'block';
     } else if (matchState === 'LOBBY') {
-      if (view) view.removeAttribute('src');
       notice.textContent = 'Player left the match.';
       notice.style.display = 'block';
     } else {
-      // Back in a live match — hide the notice, new frames will repopulate
-      // the view as soon as the broadcaster's next capture tick fires.
       notice.style.display = 'none';
     }
   }
@@ -331,11 +515,17 @@ import { joinRoom } from 'https://esm.run/trystero';
     }
     spectatedMatchState = null;
 
+    if (stopRenderLoop) {
+      stopRenderLoop();
+      stopRenderLoop = null;
+    }
+    if (spectatorSession) {
+      destroySession(spectatorSession);
+      spectatorSession = null;
+    }
+
     const overlay = document.getElementById('spectator-overlay');
     if (overlay) overlay.style.display = 'none';
-
-    const view = document.getElementById('spectator-render-view');
-    if (view) view.removeAttribute('src');
 
     const notice = document.getElementById('spectator-death-notice');
     if (notice) notice.style.display = 'none';

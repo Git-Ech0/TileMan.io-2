@@ -1106,9 +1106,31 @@ body.spectating-active #game {
 }
 
 #spectator-render-view {
-  width: 100%;
-  height: 100%;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
+}
+
+#spectator-host-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10000;
+}
+
+#spectator-host-hud #leftbottom,
+#spectator-host-hud #leaderboard,
+#spectator-host-hud #timer,
+#spectator-host-hud #performance_stats,
+#spectator-host-hud #title,
+#spectator-host-hud #after {
+  position: fixed;
+}
+
+#spectator-host-hud #after .buttons {
+  display: none;
 }
 
 /* Shown over the (now-blank) render view while the spectated player is
@@ -1146,7 +1168,7 @@ body.spectating-active #game {
   cursor: pointer;
   box-shadow: var(--shadow-red);
   transition: all 0.2s ease;
-  z-index: 10000;
+  z-index: 10001;
 }
 
 #spectator-close-btn:hover {

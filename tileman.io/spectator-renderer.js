@@ -340,9 +340,18 @@ function syncHostHud(session) {
   syncElementSnapshot(layer, 'title', display.title);
   const leaders = layer.querySelector('[data-host-id="leaderboard"] #leaders');
   if (leaders) leaders.innerHTML = display.leaderboardHtml || '';
+  const leaderboard = layer.querySelector('[data-host-id="leaderboard"]');
+  if (leaderboard) {
+    applyHostTypography(leaderboard, display.leaderboardContainer);
+    if (display.leaderboardContainer?.style) leaderboard.setAttribute('style', display.leaderboardContainer.style);
+  }
   const card = display.scoreCard;
   const after = layer.querySelector('[data-host-id="after"]');
   if (after && card) {
+    applyHostTypography(after, display.scoreCardContainer);
+    if (display.scoreCardContainer?.style) after.setAttribute('style', display.scoreCardContainer.style);
+    const panel = after.querySelector('#after2');
+    if (panel) applyHostTypography(panel, display.scoreCardPanel);
     after.style.display = card.active ? 'block' : 'none';
     const scoreValues = {
       info2: card.info,

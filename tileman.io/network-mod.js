@@ -16,6 +16,14 @@
  * The player registry / sub / unsub / ping machinery is unchanged; only
  * the payload that flows over what used to be `frameAction` changed, plus
  * the spectator view element itself is now a <canvas> instead of an <img>.
+ *
+ * Also new: a standing 'pos' broadcast (see broadcastPosition/
+ * getRemoteMatchPlayers below) that has nothing to do with spectating. Any
+ * two clients who are actively playing in the same region+mode+gridSize
+ * continuously trade bare position + display-color updates over this same
+ * P2P mesh, so hra_min.js_3Ffu's minimap can plot every player in the
+ * match, not just whichever ones the game server itself has told this
+ * client about.
  */
 
 import { joinRoom } from 'https://esm.run/trystero';
@@ -52,11 +60,26 @@ import {
   const MIN_DELTA_FRAME_MS = 1000 / DELTA_HZ;
   const KEYFRAME_RESYNC_MS = 8000;             // periodic full resync safety net
 
+  // Lightweight, always-on position broadcast so every player in the same
+  // match can show up on each other's in-game minimap — independent of the
+  // keyframe/delta stream above, which only runs for peers actively being
+  // spectated. This one is tiny (a couple of numbers plus a color) and goes
+  // out to the whole room continuously while a match is active, whether or
+  // not anyone happens to be spectating.
+  const POSITION_HZ = 8;
+  const MIN_POSITION_FRAME_MS = 1000 / POSITION_HZ;
+  const REMOTE_POSITION_STALE_MS = 4000; // drop a peer's marker if they've gone quiet this long
+
   let room = null;
-  let pingAction, subscribeAction, unsubscribeAction, syncAction;
+  let pingAction, subscribeAction, unsubscribeAction, syncAction, positionAction;
 
   const playerRegistry = new Map();   // peerId -> { username, region, mode, matchState, lastSeen, allowSpectating }
   const activeSpectators = new Set(); // peerIds currently watching our state
+  // peerId -> { x, y, color, activeColor, name, region, mode, gridSize, receivedAt }
+  // Same-match player positions received via positionAction, used to draw
+  // everyone's dot on the in-game minimap. See broadcastPosition() /
+  // getRemoteMatchPlayers() below.
+  const remoteMatchPositions = new Map();
   let spectatingPeerId = null;
   let spectatedMatchState = null;
   let broadcastTimer = null;
@@ -103,6 +126,7 @@ import {
     subscribeAction = room.makeAction('sub');
     unsubscribeAction = room.makeAction('unsub');
     syncAction = room.makeAction('sync'); // carries { type: 'keyframe' | 'delta', ... }
+    positionAction = room.makeAction('pos'); // carries { x, y, color, activeColor, name, region, mode, gridSize }
 
     room.onPeerJoin = (peerId) => {
       sendStatePing(peerId);
@@ -111,6 +135,7 @@ import {
     room.onPeerLeave = (peerId) => {
       playerRegistry.delete(peerId);
       activeSpectators.delete(peerId);
+      remoteMatchPositions.delete(peerId);
       if (spectatingPeerId === peerId) exitSpectatorView();
       handleStreamingService();
       updateUI();
@@ -130,6 +155,12 @@ import {
         allowSpectating: state.allowSpectating !== false,
         lastSeen: Date.now()
       });
+      // Ping is the authoritative "are you still in a match" signal, so use
+      // it to clear a stale marker right away instead of waiting out
+      // REMOTE_POSITION_STALE_MS (e.g. player died or returned to lobby).
+      if (matchState !== 'MATCH') {
+        remoteMatchPositions.delete(peerId);
+      }
       updateUI();
 
       if (spectatingPeerId === peerId && (!previous || previous.matchState !== matchState)) {
@@ -190,6 +221,24 @@ import {
       }
     };
 
+    positionAction.onMessage = (data, { peerId }) => {
+      if (!data || typeof data.x !== 'number' || typeof data.y !== 'number') return;
+      remoteMatchPositions.set(peerId, {
+        x: data.x,
+        y: data.y,
+        color: data.color,
+        activeColor: data.activeColor || data.color,
+        name: data.name || '',
+        region: data.region,
+        mode: data.mode,
+        gridSize: data.gridSize,
+        receivedAt: Date.now(),
+      });
+    };
+
+    setInterval(broadcastPosition, MIN_POSITION_FRAME_MS);
+    setInterval(pruneStalePositions, 1000);
+
     setInterval(broadcastState, PING_INTERVAL_MS);
 
     setInterval(() => {
@@ -249,6 +298,61 @@ import {
 
   function broadcastState() {
     sendStatePing();
+  }
+
+  // Continuous, low-overhead position broadcast — separate from the
+  // keyframe/delta stream (which only targets active spectators) so every
+  // player currently in a match can plot every other same-match player on
+  // their own in-game minimap, not just whoever the game server happens to
+  // have already told this specific client about. The color sent is each
+  // player's own activeColorPalette entry (i.e. post brightness/custom-color
+  // settings) — exactly what they see on their own screen.
+  function broadcastPosition() {
+    const T = window.TamState;
+    if (!T || !T.isGameActive) return;
+    if (T.localPlayer && T.localPlayer.de !== null) return; // don't broadcast while dead
+    const pos = T.getSelfPos();
+    if (!pos) return;
+    const rawColor = T.getSelfColor();
+    const activeColor = (T.activeColorPalette && T.activeColorPalette[rawColor]) || rawColor;
+    positionAction.send({
+      x: pos.x,
+      y: pos.y,
+      color: rawColor,
+      activeColor,
+      name: T.getSelfName() || 'Player',
+      region: T.selectedRegion,
+      mode: T.selectedMode,
+      gridSize: T.gridSize,
+    });
+  }
+
+  function pruneStalePositions() {
+    const now = Date.now();
+    remoteMatchPositions.forEach((data, peerId) => {
+      if (now - data.receivedAt > REMOTE_POSITION_STALE_MS) {
+        remoteMatchPositions.delete(peerId);
+      }
+    });
+  }
+
+  // Same-match players only. The room is one shared "global" P2P mesh
+  // carrying every region/mode at once, so this filters down to peers who
+  // could plausibly be on the same map as the local player (same region,
+  // mode, and grid size) before handing their positions to the renderer.
+  function getRemoteMatchPlayers() {
+    const T = window.TamState;
+    if (!T || !T.isGameActive) return [];
+    const region = T.selectedRegion;
+    const mode = T.selectedMode;
+    const gridSize = T.gridSize;
+    const out = [];
+    remoteMatchPositions.forEach((data) => {
+      if (data.region === region && data.mode === mode && data.gridSize === gridSize) {
+        out.push({ x: data.x, y: data.y, color: data.activeColor || data.color, name: data.name });
+      }
+    });
+    return out;
   }
 
   function handleStreamingService() {
@@ -714,6 +818,7 @@ import {
       clearInterval(stateSync);
       window.TamState.forceDisconnectSpectator = exitSpectatorView;
       window.TamState.getSpectatorCount = () => activeSpectators.size;
+      window.TamState.getRemoteMatchPlayers = getRemoteMatchPlayers;
       initializeMod();
     }
   }, 100);

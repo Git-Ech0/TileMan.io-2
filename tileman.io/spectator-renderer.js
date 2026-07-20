@@ -509,31 +509,43 @@ export function renderFrame(canvas, session) {
     for (let gy = minY; gy <= maxY; gy++) {
       const idx = gx * gridSize + gy;
       const raw = session.tiles[idx];
-      const fill = raw === undefined ? emptyCellColor : resolveColor(session, raw);
-      const { x: sx, y: sy } = worldToScreen(gx, gy);
-      const w = TILE_PX * scaleX + 0.5; // slight overdraw hides seams between tiles
-      const h = TILE_PX * scaleY + 0.5;
-
-      ctx.fillStyle = fill;
-      if (snakeSize === 0) {
-        ctx.fillRect(sx, sy, w, h);
-      } else {
-        const px = snakeSize * scaleX;
-        const py = snakeSize * scaleY;
-        ctx.fillRect(sx + px, sy + py, Math.max(0, w - px * 2), Math.max(0, h - py * 2));
+      let fill = raw === undefined ? emptyCellColor : resolveColor(session, raw);
+      if (raw === colors?.DEFAULT_EMPTY_CELL_COLOR) {
+        const mx = Math.floor(gx / 5);
+        const my = Math.floor(gy / 5);
+        const projectionIndex = mx * session.minimapWidth + my;
+        const isInsideLiveViewport = Math.abs(gx - cameraPos[0]) <= TILE_DRAW_RADIUS_X &&
+          Math.abs(gy - cameraPos[1]) <= TILE_DRAW_RADIUS_Y;
+        if (isInsideLiveViewport && session.projectionSeen) session.projectionSeen[projectionIndex] = 1;
+        const hasOverride = !!session.projectionSeen?.[projectionIndex];
+        if (toggles?.isMinimapProjectionEnabled && !isInsideLiveViewport && !hasOverride &&
+            session.collisionBuffer?.[projectionIndex]) {
+          fill = colors?.projectionShadowColor || emptyCellColor;
+        } else {
+          fill = emptyCellColor;
+        }
       }
-
-      const flashAt = session.tileFlash[idx];
-      if (flashAt !== null) {
-        const dt = performance.now() - flashAt;
-        if (dt > CAPTURE_FLASH_MS) {
+      const { x: sx, y: sy } = worldToScreen(gx, gy);
+      const w = TILE_PX * scaleX;
+      const h = TILE_PX * scaleY;
+      let stroke = snakeSize;
+      const changedAt = session.tileFlash[idx];
+      if (toggles?.areAnimationsEnabled !== false && changedAt !== null) {
+        const elapsed = performance.now() - changedAt;
+        if (elapsed > 400) {
           session.tileFlash[idx] = null;
         } else {
-          const alpha = 1 - dt / CAPTURE_FLASH_MS;
-          ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.6})`;
-          ctx.lineWidth = 2;
-          ctx.strokeRect(sx + 1, sy + 1, w - 2, h - 2);
+          stroke = 5 - (elapsed * (10 - 2 * snakeSize)) / 800;
         }
+      }
+
+      ctx.fillStyle = fill;
+      if (snakeSize === 0 && stroke <= 0) {
+        ctx.fillRect(sx, sy, w, h);
+      } else {
+        const px = stroke * scaleX;
+        const py = stroke * scaleY;
+        ctx.fillRect(sx + px, sy + py, Math.max(0, w - px * 2), Math.max(0, h - py * 2));
       }
     }
   }
@@ -551,6 +563,7 @@ export function renderFrame(canvas, session) {
   drawBoundsList(ctx, session.bounds.lobby, worldToScreen, '#bbf');
   drawBoundsList(ctx, session.bounds.safe, worldToScreen, '#ff0');
   drawBoundsList(ctx, session.bounds.trail, worldToScreen, '#000');
+  drawDebugGrid(ctx, session, worldToScreen, minX, minY, maxX, maxY);
   drawPathfinding(ctx, session, worldToScreen);
 
   // ── Players ──
@@ -591,6 +604,7 @@ function drawMinimap(ctx, canvas, session) {
 
   ctx.save();
   ctx.globalAlpha = 0.6;
+  ctx.imageSmoothingEnabled = false;
 
   const selfRec = session.players.get(session.selfId);
   const ownColor = selfRec ? resolveColor(session, selfRec.curr.color) : '#fff';
@@ -600,7 +614,7 @@ function drawMinimap(ctx, canvas, session) {
   for (let mx = 0; mx < mw; mx++) {
     for (let my = 0; my < mw; my++) {
       if (session.collisionBuffer[mx * mw + my]) {
-        ctx.fillRect(ox + mx * cell, oy + my * cell, cell + 0.5, cell + 0.5);
+        ctx.fillRect(ox + mx * cell, oy + my * cell, cell, cell);
       }
     }
   }
@@ -619,6 +633,7 @@ function drawMinimap(ctx, canvas, session) {
     ctx.fill();
     ctx.stroke();
   }
+  ctx.imageSmoothingEnabled = true;
   ctx.restore();
 }
 
@@ -758,6 +773,49 @@ function drawPathfinding(ctx, session, worldToScreen) {
     });
     ctx.strokeStyle = item.color;
     ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawDebugGrid(ctx, session, worldToScreen, minX, minY, maxX, maxY) {
+  if (!session.renderSettings?.toggles?.isDebugLinesEnabled) return;
+  const colors = session.renderSettings.colors || {};
+  const x0 = minX * 10;
+  const y0 = minY * 10;
+  const x1 = (maxX + 1) * 10;
+  const y1 = (maxY + 1) * 10;
+  const startX = Math.floor(x0 / 50) * 50;
+  const startY = Math.floor(y0 / 50) * 50;
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = colors.debugGridLineColor || '#ffd700';
+  for (let x = startX; x <= x1 + 50; x += 50) {
+    if (x < x0 || x > x1) continue;
+    const top = worldToScreen(x / 10, y0 / 10);
+    const bottom = worldToScreen(x / 10, y1 / 10);
+    ctx.beginPath();
+    ctx.moveTo(top.x, top.y);
+    ctx.lineTo(bottom.x, bottom.y);
+    ctx.stroke();
+  }
+  for (let y = startY; y <= y1 + 50; y += 50) {
+    if (y < y0 || y > y1) continue;
+    const left = worldToScreen(x0 / 10, y / 10);
+    const right = worldToScreen(x1 / 10, y / 10);
+    ctx.beginPath();
+    ctx.moveTo(left.x, left.y);
+    ctx.lineTo(right.x, right.y);
+    ctx.stroke();
+  }
+  for (const [offset, size, color] of [[10, 30, colors.debugBox3x3Color], [20, 10, colors.debugBox1x1Color]]) {
+    ctx.strokeStyle = color || '#00ff00';
+    for (let x = startX; x <= x1; x += 50) {
+      for (let y = startY; y <= y1; y += 50) {
+        const topLeft = worldToScreen((x + offset) / 10, (y + offset) / 10);
+        const bottomRight = worldToScreen((x + offset + size) / 10, (y + offset + size) / 10);
+        ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+      }
+    }
   }
   ctx.restore();
 }

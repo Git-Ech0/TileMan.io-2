@@ -607,21 +607,20 @@ function drawMinimap(ctx, canvas, session) {
   ctx.imageSmoothingEnabled = false;
 
   const selfRec = session.players.get(session.selfId);
-  const ownColor = selfRec ? resolveColor(session, selfRec.curr.color) : '#fff';
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(ox, oy, size, size);
-  ctx.fillStyle = '#000';
-  for (let mx = 0; mx < mw; mx++) {
-    for (let my = 0; my < mw; my++) {
-      if (session.collisionBuffer[mx * mw + my]) {
-        ctx.fillRect(ox + mx * cell, oy + my * cell, cell, cell);
+  const minimapCanvas = session.minimapCanvas;
+  const minimapCtx = minimapCanvas && minimapCanvas.getContext('2d');
+  if (minimapCtx) {
+    minimapCtx.imageSmoothingEnabled = false;
+    minimapCtx.fillStyle = '#fff';
+    minimapCtx.fillRect(0, 0, mw, mw);
+    minimapCtx.fillStyle = '#000';
+    for (let mx = 0; mx < mw; mx++) {
+      for (let my = 0; my < mw; my++) {
+        if (session.collisionBuffer[mx * mw + my]) minimapCtx.fillRect(mx, my, 1, 1);
       }
     }
+    ctx.drawImage(minimapCanvas, ox, oy, size, size);
   }
-
-  ctx.strokeStyle = ownColor;
-  ctx.lineWidth = mmScale;
-  ctx.strokeRect(ox, oy, size, size);
 
   if (selfRec) {
     const markerSize = Math.max(4 * backingStoreRatio * resolutionMultiplier, 2);
@@ -906,10 +905,6 @@ function drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, isSelf
   gradient.addColorStop(1, 'rgba(0,0,0,.3)');
   ctx.fillStyle = gradient;
   ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(0,0,0,.5)';
-  ctx.stroke();
-
   if (isSelf && session.renderSettings?.toggles?.renderServerPosition && p.serverPosition) {
     const server = worldToScreen(p.serverPosition[0] + 0.5, p.serverPosition[1] + 0.5);
     ctx.fillStyle = 'rgba(0,0,0,.2)';
@@ -955,7 +950,7 @@ function drawPlayer(ctx, rec, session, renderTime, worldToScreen, scaleX, isSelf
         dx - (nameCanvas.width / 16 + 1) * scaleX,
         dy - 9 * scaleX,
         (nameCanvas.width / 8) * scaleX,
-        (nameCanvas.height / 8) * scaleY
+        (nameCanvas.height / 8) * scaleX
       );
     }
   }

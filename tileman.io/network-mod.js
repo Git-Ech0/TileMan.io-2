@@ -515,6 +515,7 @@ import {
       : [];
     lastChatSnapshot = currentChat;
 
+    const viewerSettings = buildViewerSettings();
     const payload = {
       type: 'delta',
       schema: 2,
@@ -549,8 +550,8 @@ import {
       leaderboard: T.getScoreboardData ? T.getScoreboardData() : [],
       display: buildDisplaySnapshot(),
       pathfinding: buildPathfindingSnapshot(),
-      viewerSettings: buildViewerSettings(),
-      renderSettings: buildViewerSettings(),
+      viewerSettings,
+      renderSettings: viewerSettings,
     };
 
     activeSpectators.forEach((peerId) => {

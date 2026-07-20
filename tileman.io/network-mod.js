@@ -273,6 +273,25 @@ import {
     return flat;
   }
 
+  // The broadcaster's own personal render preferences — these live purely
+  // client-side in hra_min.js and were never sent anywhere before now, so a
+  // spectator's view could never actually match what the broadcaster sees.
+  // Small primitives, cheap to send every tick alongside everything else.
+  function buildViewerSettings() {
+    const T = window.TamState;
+    return {
+      snakeSizeRatio: T.snakeSizeRatio,
+      isCameraZoomEnabled: T.isCameraZoomEnabled,
+      cameraZoomFactor: T.cameraZoomFactor,
+      areAnimationsEnabled: T.areAnimationsEnabled,
+      isMinimapProjectionEnabled: T.isMinimapProjectionEnabled,
+      emptyCellColor: T.emptyCellColor,
+      cellBgColor: T.cellBgColor,
+      projectionShadowColor: T.projectionShadowColor,
+      customSkinsEnabled: T.customSkinsEnabled,
+    };
+  }
+
   function sendKeyframe(targetPeerId) {
     const T = window.TamState;
     if (!T || getLocalMatchState() !== 'MATCH') return;
@@ -296,6 +315,12 @@ import {
       gridSize,
       tiles: encodeGridRLE(grid, gridSize),
       colorPalette: T.colorPalette,
+      // Raw colorPalette entries are unadjusted hex; activeColorPalette maps
+      // each to what the broadcaster's own client actually paints with,
+      // after their brightness/contrast preference is applied. Both
+      // renderActiveGrid() and drawPlayer() key off activeColorPalette,
+      // not colorPalette, so this is the one that actually matters visually.
+      activeColorPalette: T.activeColorPalette,
       // TamState doesn't expose a live emptyCellColor getter (it's derived
       // from each viewer's own 'bgem' localStorage setting), so we send the
       // documented default and let the spectator apply their own theme.
@@ -310,6 +335,7 @@ import {
       minimapWidth,
       collisionBuffer: collisionFlat,
       leaderboard: T.getScoreboardData ? T.getScoreboardData() : [],
+      viewerSettings: buildViewerSettings(),
     }, { target: targetPeerId });
   }
 
@@ -410,6 +436,7 @@ import {
       // getScoreboardData() helper. Small array, sent in full each tick —
       // not worth diffing.
       leaderboard: T.getScoreboardData ? T.getScoreboardData() : [],
+      viewerSettings: buildViewerSettings(),
     };
 
     activeSpectators.forEach((peerId) => {

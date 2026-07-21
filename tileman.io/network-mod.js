@@ -32,7 +32,7 @@ import {
 } from './spectator-renderer.js';
 
 (function () {
-  const APP_ID = 'tileman-io-p2p-spectator-v3';
+  const APP_ID = 'tileman-io-p2p-spectator-v5';
   const ROOM_ID = 'global';
 
   // TURN relay fallback for peer pairs that can't establish a direct WebRTC

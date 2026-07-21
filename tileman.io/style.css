@@ -1003,28 +1003,13 @@ body.spectating-active #game {
   display: none !important;
 }
 
-.p2p-header {
-  flex: 0 0 auto;
-  cursor: move;
-  touch-action: none;
-  background: transparent;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 0.8em;
-  letter-spacing: 0.08em;
-  color: var(--text-secondary);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
 /* ===== PLAYER TAB: Players/Chat tabs ===== */
 .p2p-tabs {
   flex: 0 0 auto;
   display: flex;
   border-bottom: 1px solid var(--border);
+  cursor: move;
+  touch-action: none;
 }
 
 .p2p-tab-btn {

@@ -71,10 +71,18 @@ import {
   const REMOTE_POSITION_STALE_MS = 4000; // drop a peer's marker if they've gone quiet this long
 
   let room = null;
-  let pingAction, subscribeAction, unsubscribeAction, syncAction, positionAction;
+  let pingAction, subscribeAction, unsubscribeAction, syncAction, positionAction, chatAction;
 
   const playerRegistry = new Map();   // peerId -> { username, region, mode, matchState, lastSeen, allowSpectating }
   const activeSpectators = new Set(); // peerIds currently watching our state
+
+  // Room-wide P2P chat. Nothing here ever touches localStorage/history —
+  // it's peer-to-peer with no server backing it, so the log is purely
+  // in-memory and starts fresh every time this mod initializes. Capped so
+  // a long session doesn't grow this unboundedly.
+  const CHAT_HISTORY_LIMIT = 200;
+  const chatMessages = []; // [{ name, text, sentAt, isSelf }]
+  let activeP2PTab = 'players';
   // peerId -> { x, y, color, activeColor, name, region, mode, gridSize, receivedAt }
   // Same-match player positions received via positionAction, used to draw
   // everyone's dot on the in-game minimap. See broadcastPosition() /
@@ -127,6 +135,7 @@ import {
     unsubscribeAction = room.makeAction('unsub');
     syncAction = room.makeAction('sync'); // carries { type: 'keyframe' | 'delta', ... }
     positionAction = room.makeAction('pos'); // carries { x, y, color, activeColor, name, region, mode, gridSize }
+    chatAction = room.makeAction('chat'); // carries { name, text, sentAt } — broadcast to the whole room, no target
 
     room.onPeerJoin = (peerId) => {
       sendStatePing(peerId);
@@ -236,6 +245,22 @@ import {
       });
     };
 
+    chatAction.onMessage = (data, { peerId }) => {
+      if (!data || typeof data.text !== 'string') return;
+      const text = data.text.trim().slice(0, 300);
+      if (!text) return;
+      const registryEntry = playerRegistry.get(peerId);
+      const name = (typeof data.name === 'string' && data.name.trim())
+        || registryEntry?.username
+        || 'Unnamed Slot';
+      addChatMessage({
+        name: name.slice(0, 40),
+        text,
+        sentAt: typeof data.sentAt === 'number' ? data.sentAt : Date.now(),
+        isSelf: false,
+      });
+    };
+
     setInterval(broadcastPosition, MIN_POSITION_FRAME_MS);
     setInterval(pruneStalePositions, 1000);
 
@@ -254,7 +279,147 @@ import {
     const closeBtn = document.getElementById('spectator-close-btn');
     if (closeBtn) closeBtn.onclick = exitSpectatorView;
 
+    initChatUI();
     updateUI();
+  }
+
+  // ─── Chat tab (Players/Chat switching + sending) ───────────────────────
+  function initChatUI() {
+    const tabPlayers = document.getElementById('p2p-tab-players');
+    const tabChat = document.getElementById('p2p-tab-chat');
+    const listEl = document.getElementById('p2p-list');
+    const chatEl = document.getElementById('p2p-chat');
+    const chatInput = document.getElementById('p2p-chat-input');
+    const chatSendBtn = document.getElementById('p2p-chat-send');
+
+    if (tabPlayers) tabPlayers.onclick = () => activateP2PTab('players');
+    if (tabChat) tabChat.onclick = () => activateP2PTab('chat');
+
+    function trySend() {
+      if (!chatInput) return;
+      const text = chatInput.value.trim().slice(0, 300);
+      if (!text) return;
+      const name = currentState().username;
+      const sentAt = Date.now();
+      chatAction.send({ name, text, sentAt });
+      addChatMessage({ name, text, sentAt, isSelf: true });
+      chatInput.value = '';
+      if (chatSendBtn) chatSendBtn.disabled = true;
+    }
+
+    if (chatSendBtn) chatSendBtn.onclick = trySend;
+    if (chatInput) {
+      chatInput.addEventListener('input', () => {
+        if (chatSendBtn) chatSendBtn.disabled = chatInput.value.trim().length === 0;
+      });
+      chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          trySend();
+        }
+      });
+    }
+
+    // Not switching tabs here — just making sure the panels reflect
+    // whatever activeP2PTab already is (relevant if this ever re-runs).
+    if (listEl) listEl.style.display = activeP2PTab === 'players' ? 'block' : 'none';
+    if (chatEl) chatEl.style.display = activeP2PTab === 'chat' ? 'flex' : 'none';
+  }
+
+  function activateP2PTab(tab) {
+    activeP2PTab = tab;
+    const tabPlayers = document.getElementById('p2p-tab-players');
+    const tabChat = document.getElementById('p2p-tab-chat');
+    const listEl = document.getElementById('p2p-list');
+    const chatEl = document.getElementById('p2p-chat');
+    const chatDot = document.getElementById('p2p-chat-dot');
+
+    if (tabPlayers) tabPlayers.classList.toggle('active', tab === 'players');
+    if (tabChat) tabChat.classList.toggle('active', tab === 'chat');
+    if (listEl) listEl.style.display = tab === 'players' ? 'block' : 'none';
+    if (chatEl) chatEl.style.display = tab === 'chat' ? 'flex' : 'none';
+
+    if (tab === 'chat') {
+      if (chatDot) chatDot.classList.remove('visible');
+      scrollChatToBottom();
+    }
+  }
+
+  // Deterministic, purely cosmetic per-name color so different people are
+  // easy to tell apart at a glance — same idea as the game's own player
+  // colors, just a small fixed palette instead of the full wheel.
+  const CHAT_NAME_PALETTE = ['#52A8FF', '#FF7733', '#6fffa0', '#FF2E42', '#FFD700', '#c792ff', '#4ce0d2'];
+  function chatNameColor(name) {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+    return CHAT_NAME_PALETTE[hash % CHAT_NAME_PALETTE.length];
+  }
+
+  function formatChatTime(ts) {
+    const d = new Date(ts);
+    let hours = d.getHours();
+    const minutes = d.getMinutes().toString().padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    if (hours === 0) hours = 12;
+    return hours + ':' + minutes + ' ' + ampm;
+  }
+
+  function renderChatMessage(msg) {
+    const container = document.getElementById('p2p-chat-messages');
+    if (!container) return;
+    const placeholder = container.querySelector('.p2p-status-message');
+    if (placeholder) placeholder.remove();
+
+    const row = document.createElement('div');
+    row.className = 'p2p-chat-msg';
+
+    const time = document.createElement('span');
+    time.className = 'p2p-chat-time';
+    time.textContent = formatChatTime(msg.sentAt);
+    row.appendChild(time);
+
+    const body = document.createElement('div');
+    body.className = 'p2p-chat-body';
+
+    // .textContent (not innerHTML) throughout — name and text both come
+    // from an untrusted peer over the wire, so this keeps them as inert
+    // text no matter what's in them.
+    const name = document.createElement('span');
+    name.className = 'p2p-chat-name';
+    name.textContent = msg.name;
+    name.style.color = msg.isSelf ? 'var(--text-primary)' : chatNameColor(msg.name);
+    body.appendChild(name);
+
+    const text = document.createElement('span');
+    text.className = 'p2p-chat-text';
+    text.textContent = msg.text;
+    body.appendChild(text);
+
+    row.appendChild(body);
+    container.appendChild(row);
+
+    while (container.children.length > CHAT_HISTORY_LIMIT) {
+      container.removeChild(container.firstChild);
+    }
+  }
+
+  function scrollChatToBottom() {
+    const container = document.getElementById('p2p-chat-messages');
+    if (container) container.scrollTop = container.scrollHeight;
+  }
+
+  function addChatMessage(msg) {
+    chatMessages.push(msg);
+    if (chatMessages.length > CHAT_HISTORY_LIMIT) chatMessages.shift();
+    renderChatMessage(msg);
+
+    if (activeP2PTab === 'chat') {
+      scrollChatToBottom();
+    } else if (!msg.isSelf) {
+      const chatDot = document.getElementById('p2p-chat-dot');
+      if (chatDot) chatDot.classList.add('visible');
+    }
   }
 
   // hra.min.js creates #spectator-render-view as an <img>; swap it for a

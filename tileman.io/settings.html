@@ -25,6 +25,18 @@
 	<script src="https://tileman-io.vercel.app/tileman.io/chroma.min.js"></script>
 	<link rel="preload" href="https://tileman-io.vercel.app/tileman.io/tileman-blur-black.png" as="image">
 
+	<script>
+	// hra.min.js only unlocks per-color favorite selection once localStorage 'sha'
+	// (or 'col') is set. On the old page that happened when you clicked the
+	// Share/Tweet links. We set it here automatically so color choosing always
+	// works, with no click required.
+	try {
+		if (typeof localStorage.sha === 'undefined') {
+			localStorage.sha = true;
+		}
+	} catch (e) {}
+	</script>
+
 	<style>
 		/* Settings page-specific extras */
 		.page-header {

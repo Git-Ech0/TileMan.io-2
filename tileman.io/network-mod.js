@@ -253,11 +253,13 @@ import {
       const name = (typeof data.name === 'string' && data.name.trim())
         || registryEntry?.username
         || 'Unnamed Slot';
+      const chatColor = isPlausibleHexColor(data.chatColor) ? data.chatColor : null;
       addChatMessage({
         name: name.slice(0, 40),
         text,
         sentAt: typeof data.sentAt === 'number' ? data.sentAt : Date.now(),
         isSelf: false,
+        chatColor,
       });
     };
 
@@ -300,9 +302,10 @@ import {
       const text = chatInput.value.trim().slice(0, 300);
       if (!text) return;
       const name = currentState().username;
+      const chatColor = getOwnChatColor();
       const sentAt = Date.now();
-      chatAction.send({ name, text, sentAt });
-      addChatMessage({ name, text, sentAt, isSelf: true });
+      chatAction.send({ name, text, sentAt, chatColor });
+      addChatMessage({ name, text, sentAt, isSelf: true, chatColor });
       chatInput.value = '';
       if (chatSendBtn) chatSendBtn.disabled = true;
     }
@@ -345,14 +348,34 @@ import {
     }
   }
 
-  // Deterministic, purely cosmetic per-name color so different people are
-  // easy to tell apart at a glance — same idea as the game's own player
-  // colors, just a small fixed palette instead of the full wheel.
+  // Fallback only — used when a chat message doesn't carry a chatColor
+  // (e.g. it came from a peer running an older client build). The normal
+  // path is msg.chatColor, computed by the sender as the color they'd
+  // actually spawn as right now (see getOwnChatColor() below), so chat
+  // names match each person's real in-game color instead of an arbitrary
+  // cosmetic one.
   const CHAT_NAME_PALETTE = ['#52A8FF', '#FF7733', '#6fffa0', '#FF2E42', '#FFD700', '#c792ff', '#4ce0d2'];
   function chatNameColor(name) {
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
     return CHAT_NAME_PALETTE[hash % CHAT_NAME_PALETTE.length];
+  }
+
+  // What color would *we* spawn as right now? hra.min.js owns the actual
+  // rules (custom color, else first non-taken color from the player's
+  // selected list) since it already has the localStorage settings and the
+  // live match's player list in scope — this just asks for the answer.
+  function getOwnChatColor() {
+    return window.TamState?.getChatColor ? window.TamState.getChatColor() : null;
+  }
+
+  // Basic sanity check on a color coming from a peer over the wire before
+  // it ever reaches a style property — not a security boundary (invalid
+  // CSS color values are just silently ignored by the browser), just
+  // enough to keep a malformed message from a broken client from looking
+  // strange in the chat log.
+  function isPlausibleHexColor(value) {
+    return typeof value === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(value);
   }
 
   function formatChatTime(ts) {
@@ -388,7 +411,7 @@ import {
     const name = document.createElement('span');
     name.className = 'p2p-chat-name';
     name.textContent = msg.name;
-    name.style.color = msg.isSelf ? 'var(--text-primary)' : chatNameColor(msg.name);
+    name.style.color = msg.isSelf ? 'var(--text-primary)' : (msg.chatColor || chatNameColor(msg.name));
     body.appendChild(name);
 
     const text = document.createElement('span');

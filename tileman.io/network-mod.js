@@ -1,5 +1,5 @@
 /**
- * Cross-Server Spectator Mod (Trystero edition) — State-Sync
+ * TileMan.io Cross-Server Spectator Mod (Trystero edition) — State-Sync
  *
  * Same P2P transport as before (Trystero / WebRTC, no signaling server
  * beyond the public relays used for the initial handshake). What changed
@@ -32,7 +32,7 @@ import {
 } from './spectator-renderer.js';
 
 (function () {
-  const APP_ID = 'tm2-p2p-spectator-v0';
+  const APP_ID = 'tileman-io-p2p-spectator-v5';
   const ROOM_ID = 'global';
 
   // TURN relay fallback for peer pairs that can't establish a direct WebRTC
@@ -209,11 +209,11 @@ import {
         // broadcastDelta() diffs against a single shared gridShadow and just
         // fires the result at every spectator — there's no per-peer ack, so
         // if THIS delta message gets dropped (packet loss on a laggy/lossy
-        // P2P connection), whatever s changed in that tick are gone for
+        // P2P connection), whatever tiles changed in that tick are gone for
         // good: the broadcaster's shadow has already moved on and won't
         // re-diff those cells again. Previously the only recovery was the
         // periodic 8s keyframe resync, so a consistently lossy peer could
-        // end up with s that never come back (or flicker in every 8s
+        // end up with tiles that never come back (or flicker in every 8s
         // just to drop out again). `sequence` was already being tracked to
         // reject stale/out-of-order packets, but nothing checked for GAPS.
         // Detect a gap here and immediately re-subscribe — the broadcaster's
@@ -233,6 +233,7 @@ import {
     positionAction.onMessage = (data, { peerId }) => {
       if (!data || typeof data.x !== 'number' || typeof data.y !== 'number') return;
       remoteMatchPositions.set(peerId, {
+        id: data.id,
         x: data.x,
         y: data.y,
         color: data.color,
@@ -504,6 +505,7 @@ import {
     const rawColor = T.getSelfColor();
     const activeColor = (T.activeColorPalette && T.activeColorPalette[rawColor]) || rawColor;
     positionAction.send({
+      id: T.getSelfId(),
       x: pos.x,
       y: pos.y,
       color: rawColor,
@@ -537,7 +539,7 @@ import {
     const out = [];
     remoteMatchPositions.forEach((data) => {
       if (data.region === region && data.mode === mode && data.gridSize === gridSize) {
-        out.push({ x: data.x, y: data.y, color: data.activeColor || data.color, name: data.name });
+        out.push({ id: data.id, x: data.x, y: data.y, color: data.activeColor || data.color, name: data.name });
       }
     });
     return out;

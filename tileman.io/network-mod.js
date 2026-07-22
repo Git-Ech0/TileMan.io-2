@@ -1,31 +1,3 @@
-/**
- * TileMan.io Cross-Server Spectator Mod (Trystero edition) — State-Sync
- *
- * Same P2P transport as before (Trystero / WebRTC, no signaling server
- * beyond the public relays used for the initial handshake). What changed
- * is *what* gets sent to a spectator and *how* it becomes pixels:
- *
- *   OLD: capture the broadcaster's <canvas> to a webp blob every frame,
- *        ship the image, spectator just displays it in an <img>.
- *   NEW: ship the broadcaster's game *state* (from window.TamState) —
- *        players, tile grid, camera — and let the spectator's own client
- *        redraw it locally. Cheaper, resolution-independent, and each
- *        spectator's view is reconstructed from data rather than mirrored
- *        video.
- *
- * The player registry / sub / unsub / ping machinery is unchanged; only
- * the payload that flows over what used to be `frameAction` changed, plus
- * the spectator view element itself is now a <canvas> instead of an <img>.
- *
- * Also new: a standing 'pos' broadcast (see broadcastPosition/
- * getRemoteMatchPlayers below) that has nothing to do with spectating. Any
- * two clients who are actively playing in the same region+mode+gridSize
- * continuously trade bare position + display-color updates over this same
- * P2P mesh, so hra_min.js_3Ffu's minimap can plot every player in the
- * match, not just whichever ones the game server itself has told this
- * client about.
- */
-
 import { joinRoom } from 'https://esm.run/trystero';
 import {
   createSession, destroySession, applyKeyframe, applyDelta, startRenderLoop,

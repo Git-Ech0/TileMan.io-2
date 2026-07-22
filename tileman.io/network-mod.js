@@ -764,6 +764,31 @@ import {
     return out;
   }
 
+  // Ping-registry-based name list for friendly fire. Unlike getRemoteMatchPlayers()
+  // which requires an active positionAction broadcast, this reads playerRegistry
+  // which is kept alive by ping heartbeats alone. A peer with ghost mode on
+  // or allowSpectating=false still pings — so their name lands here even when
+  // they're invisible on the minimap or hidden from the spectator list.
+  // Filters to same region+mode only (matching getRemoteMatchPlayers' logic).
+  function getP2PPlayerNames() {
+    const T = window.TamState;
+    if (!T || !T.isGameActive) return [];
+    const region = T.selectedRegion;
+    const mode = T.selectedMode;
+    const names = [];
+    playerRegistry.forEach((data) => {
+      if (
+        data.matchState === 'MATCH' &&
+        data.region === region &&
+        data.mode === mode &&
+        data.username
+      ) {
+        names.push(data.username);
+      }
+    });
+    return names;
+  }
+
   function handleStreamingService() {
     const localMatchState = getLocalMatchState();
     const shouldStream = activeSpectators.size > 0 &&
@@ -1226,6 +1251,14 @@ import {
       window.TamState.forceDisconnectSpectator = exitSpectatorView;
       window.TamState.getSpectatorCount = () => activeSpectators.size;
       window.TamState.getRemoteMatchPlayers = getRemoteMatchPlayers;
+      // Returns the set of names of every peer currently in a live match in
+      // the same region+mode as us, sourced from the ping registry — NOT
+      // from remoteMatchPositions. This means it works even when a peer has
+      // ghost mode on (they stop broadcasting position but their pings still
+      // arrive) or has allowSpectating=false (spectators can't see them but
+      // they're still pinging). Used by FF so the guard never drops a
+      // teammate just because they turned off position broadcasting.
+      window.TamState.getP2PPlayerNames = getP2PPlayerNames;
       initializeMod();
     }
   }, 100);

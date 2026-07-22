@@ -1,3 +1,31 @@
+/**
+ * TileMan.io Cross-Server Spectator Mod (Trystero edition) — State-Sync
+ *
+ * Same P2P transport as before (Trystero / WebRTC, no signaling server
+ * beyond the public relays used for the initial handshake). What changed
+ * is *what* gets sent to a spectator and *how* it becomes pixels:
+ *
+ *   OLD: capture the broadcaster's <canvas> to a webp blob every frame,
+ *        ship the image, spectator just displays it in an <img>.
+ *   NEW: ship the broadcaster's game *state* (from window.TamState) —
+ *        players, tile grid, camera — and let the spectator's own client
+ *        redraw it locally. Cheaper, resolution-independent, and each
+ *        spectator's view is reconstructed from data rather than mirrored
+ *        video.
+ *
+ * The player registry / sub / unsub / ping machinery is unchanged; only
+ * the payload that flows over what used to be `frameAction` changed, plus
+ * the spectator view element itself is now a <canvas> instead of an <img>.
+ *
+ * Also new: a standing 'pos' broadcast (see broadcastPosition/
+ * getRemoteMatchPlayers below) that has nothing to do with spectating. Any
+ * two clients who are actively playing in the same region+mode+gridSize
+ * continuously trade bare position + display-color updates over this same
+ * P2P mesh, so hra_min.js_3Ffu's minimap can plot every player in the
+ * match, not just whichever ones the game server itself has told this
+ * client about.
+ */
+
 import { joinRoom } from 'https://esm.run/trystero';
 import {
   createSession, destroySession, applyKeyframe, applyDelta, startRenderLoop,
@@ -21,6 +49,21 @@ import {
   ];
 
   const PING_INTERVAL_MS = 3000;
+
+  // ─── Connection health / auto-refresh constants ──────────────────────────
+  // How long a peer can go silent before we consider them ghost-stale and
+  // purge them from the registry + UI. Should be comfortably longer than
+  // PING_INTERVAL_MS so one missed ping doesn't evict a live peer.
+  const PEER_STALE_MS = 12000;
+  // How often the health-watcher sweeps for stale peers and re-announces
+  // our own presence to the mesh. Faster than PING_INTERVAL_MS so we
+  // flood-fill the room quicker after a reconnect.
+  const HEALTH_CHECK_MS = 2000;
+  // How long to wait after detecting zero peers before triggering a full
+  // room rejoin (tab is connected but nobody can see us / we can't see them).
+  const REJOIN_EMPTY_TIMEOUT_MS = 8000;
+  // Back-off ceiling for consecutive failed-reconnect attempts (ms).
+  const MAX_REJOIN_BACKOFF_MS = 30000;
   const DELTA_HZ = 24;                         // state ticks/sec sent to spectators. This constant used to be
                                                 // declared but never actually wired up: MIN_DELTA_FRAME_MS was
                                                 // derived from a separate MAX_DELTA_HZ=60 constant instead, so
@@ -90,26 +133,37 @@ import {
   let spectatorSession = null;
   let stopRenderLoop = null;
 
-  function initializeMod() {
+  // ─── Connection health state ─────────────────────────────────────────────
+  let rejoinAttempts = 0;               // consecutive full-rejoin cycles
+  let emptyRoomSince = null;            // timestamp when peer count first hit 0
+  let isRejoining = false;              // guard against overlapping rejoin attempts
+  let healthCheckTimer = null;          // setInterval handle for the sweep
+  let connectionHealthy = false;        // flips true once we've seen ≥1 peer
+
+  // ─── Room setup (called both on first init and on rejoin) ───────────────
+  function setupRoom() {
     const roomConfig = { appId: APP_ID };
     if (TURN_SERVERS.length > 0) {
       roomConfig.turnConfig = TURN_SERVERS;
     }
     room = joinRoom(roomConfig, ROOM_ID, {
       onJoinError: (details) => {
-        console.warn('P2P connection failed for peer', details.peerId, '-', details.error);
-        console.warn('If this keeps happening for the same peers, it likely means a TURN server is needed (see TURN_SERVERS at the top of this file).');
+        console.warn('[P2P] connection failed for peer', details.peerId, '-', details.error);
+        console.warn('[P2P] If this keeps happening, add a TURN server (see TURN_SERVERS at the top of network-mod.js).');
       }
     });
 
-    pingAction = room.makeAction('ping');
-    subscribeAction = room.makeAction('sub');
-    unsubscribeAction = room.makeAction('unsub');
-    syncAction = room.makeAction('sync'); // carries { type: 'keyframe' | 'delta', ... }
-    positionAction = room.makeAction('pos'); // carries { x, y, color, activeColor, name, region, mode, gridSize }
-    chatAction = room.makeAction('chat'); // carries { name, text, sentAt } — broadcast to the whole room, no target
+    pingAction       = room.makeAction('ping');
+    subscribeAction  = room.makeAction('sub');
+    unsubscribeAction= room.makeAction('unsub');
+    syncAction       = room.makeAction('sync');
+    positionAction   = room.makeAction('pos');
+    chatAction       = room.makeAction('chat');
 
     room.onPeerJoin = (peerId) => {
+      connectionHealthy = true;
+      emptyRoomSince = null;
+      rejoinAttempts = 0;
       sendStatePing(peerId);
     };
 
@@ -122,11 +176,112 @@ import {
       updateUI();
     };
 
+    wireActions();
+  }
+
+  // ─── Full room rejoin (tears down the old room, creates a fresh one) ────
+  // Used when the health-watcher decides the connection is stuck. We
+  // preserve the spectator session if there is one — we can't know whether
+  // the host is still alive until we reconnect, so exitSpectatorView() is
+  // intentionally NOT called here; syncAction.onMessage will handle
+  // resuming or the next health sweep will call it if the host never comes
+  // back.
+  function rejoinRoom() {
+    if (isRejoining) return;
+    isRejoining = true;
+
+    console.info('[P2P] triggering room rejoin (attempt', rejoinAttempts + 1, ')');
+
+    // Tear down the old room gracefully if the API supports it.
+    try {
+      if (room && typeof room.leave === 'function') room.leave();
+    } catch (e) { /* ignore */ }
+
+    playerRegistry.clear();
+    remoteMatchPositions.clear();
+    // Don't clear activeSpectators — if we were broadcasting we want to
+    // re-send keyframes to all of them once we're back in the room.
+
+    // Exponential back-off so we don't hammer the signaling relay.
+    const backoff = Math.min(1000 * Math.pow(2, rejoinAttempts), MAX_REJOIN_BACKOFF_MS);
+    rejoinAttempts++;
+    emptyRoomSince = null;
+    connectionHealthy = false;
+
+    setTimeout(() => {
+      setupRoom();
+      // Re-announce ourselves immediately after joining.
+      setTimeout(broadcastState, 500);
+      isRejoining = false;
+      updateUI();
+    }, backoff);
+  }
+
+  // ─── Continuous connection health watcher ───────────────────────────────
+  // Runs every HEALTH_CHECK_MS. Evicts ghost peers, re-announces our
+  // presence, and triggers a full rejoin when the room looks stuck-empty.
+  function startHealthWatcher() {
+    if (healthCheckTimer) clearInterval(healthCheckTimer);
+    healthCheckTimer = setInterval(() => {
+      if (isRejoining) return;
+
+      const now = Date.now();
+
+      // 1. Evict peers whose pings have gone silent past the stale threshold.
+      //    onPeerLeave only fires for clean disconnects; NAT drop / browser
+      //    freeze never sends one, leaving ghost entries in playerRegistry
+      //    that make the UI show players who are long gone.
+      playerRegistry.forEach((data, peerId) => {
+        if (now - data.lastSeen > PEER_STALE_MS) {
+          console.info('[P2P] evicting stale peer', peerId,
+            '(silent for', Math.round((now - data.lastSeen) / 1000), 's)');
+          playerRegistry.delete(peerId);
+          activeSpectators.delete(peerId);
+          remoteMatchPositions.delete(peerId);
+          if (spectatingPeerId === peerId) exitSpectatorView();
+        }
+      });
+
+      // 2. Re-flood our state ping so newly-joined peers that missed the
+      //    initial onPeerJoin ping can find us quickly without waiting for
+      //    the next PING_INTERVAL_MS cycle.
+      broadcastState();
+
+      // 3. Detect stuck-empty room and trigger a rejoin.
+      //    We only consider it "empty" after the connection has been healthy
+      //    at least once — if we're still in the initial join phase and haven't
+      //    seen anyone yet we give it more time via REJOIN_EMPTY_TIMEOUT_MS.
+      const visiblePeers = playerRegistry.size;
+      if (visiblePeers === 0) {
+        if (emptyRoomSince === null) {
+          emptyRoomSince = now;
+        } else if (now - emptyRoomSince > REJOIN_EMPTY_TIMEOUT_MS) {
+          console.info('[P2P] room has been empty for',
+            Math.round((now - emptyRoomSince) / 1000), 's — rejoining');
+          rejoinRoom();
+          return;
+        }
+      } else {
+        emptyRoomSince = null;
+      }
+
+      updateUI();
+    }, HEALTH_CHECK_MS);
+  }
+
+  // ─── Action wire-up (extracted so both init and rejoin can call it) ─────
+  function wireActions() {
+
     pingAction.onMessage = (state, { peerId }) => {
       const previous = playerRegistry.get(peerId);
       const matchState = state.matchState === 'MATCH' || state.matchState === 'DEAD'
         ? state.matchState
         : 'LOBBY';
+
+      // Any incoming ping proves the room is alive — reset health counters.
+      connectionHealthy = true;
+      emptyRoomSince = null;
+      rejoinAttempts = 0;
 
       playerRegistry.set(peerId, {
         username: state.username || 'Unnamed Slot',
@@ -236,9 +391,17 @@ import {
       });
     };
 
+  } // end wireActions()
+
+  function initializeMod() {
+    setupRoom();
+    startHealthWatcher();
+
     setInterval(broadcastPosition, MIN_POSITION_FRAME_MS);
     setInterval(pruneStalePositions, 1000);
 
+    // Primary ping cadence — health watcher also pings at HEALTH_CHECK_MS
+    // so this is intentionally kept as the slower authoritative broadcast.
     setInterval(broadcastState, PING_INTERVAL_MS);
 
     setInterval(() => {
@@ -254,8 +417,67 @@ import {
     const closeBtn = document.getElementById('spectator-close-btn');
     if (closeBtn) closeBtn.onclick = exitSpectatorView;
 
+    // Keep the p2p panel visible even while spectating another player.
+    // The spectator overlay covers the game canvas but the panel is a
+    // separate DOM layer — force it to stay on top so players can still
+    // see who's online and chat while watching.
+    enforceP2PPanelVisibility();
+
     initChatUI();
     updateUI();
+  }
+
+  // ─── Keep the player/chat panel visible during spectator mode ──────────
+  // hra_min.js's applyP2PVisibility() only checks the 'p_tab' localStorage
+  // flag — it has no awareness of the spectating-active body class, so the
+  // panel stays visible or hidden purely based on that setting regardless of
+  // spectating state. The problem is style.css may have a rule like:
+  //   body.spectating-active #p2p-panel { display: none; }
+  // that hides it automatically. We override that here at the element level
+  // (inline style beats a class-based rule in the cascade) whenever we enter
+  // or exit spectator mode, and set up a MutationObserver so any external
+  // code that later toggles panel display can't stomp us while spectating.
+  let p2pPanelObserver = null;
+
+  function enforceP2PPanelVisibility() {
+    const applyOverride = () => {
+      const panel = document.getElementById('p2p-panel');
+      if (!panel) return;
+      const isSpectating = document.body.classList.contains('spectating-active');
+      const userWantsPanel = (function () {
+        try { return localStorage.getItem('p_tab') !== 'false'; } catch(e) { return true; }
+      })();
+
+      if (isSpectating && userWantsPanel) {
+        // Force visible + elevate above the spectator overlay (z-index 9999).
+        panel.style.setProperty('display', 'flex', 'important');
+        panel.style.setProperty('z-index', '10001', 'important');
+        panel.style.setProperty('pointer-events', 'auto', 'important');
+      } else {
+        // Remove our overrides so normal applyP2PVisibility logic takes over.
+        panel.style.removeProperty('display');
+        panel.style.removeProperty('z-index');
+        panel.style.removeProperty('pointer-events');
+      }
+    };
+
+    // React to body class changes (spectating-active added/removed).
+    if (p2pPanelObserver) p2pPanelObserver.disconnect();
+    p2pPanelObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.attributeName === 'class') { applyOverride(); break; }
+      }
+    });
+    p2pPanelObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+    // Also re-apply whenever the panel element itself might have been
+    // recreated (hra_min.js calls initP2PVisuals lazily).
+    const domObserver = new MutationObserver(() => {
+      if (document.getElementById('p2p-panel')) applyOverride();
+    });
+    domObserver.observe(document.body, { childList: true, subtree: false });
+
+    applyOverride();
   }
 
   // ─── Chat tab (Players/Chat switching + sending) ───────────────────────
@@ -937,8 +1159,6 @@ import {
     if (!notice) return;
 
     if (matchState === 'DEAD') {
-      notice.style.display = 'none';
-      return;
       notice.textContent = 'Player died — waiting for them to respawn...';
       notice.style.display = 'block';
     } else if (matchState === 'LOBBY') {

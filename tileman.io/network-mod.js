@@ -140,6 +140,16 @@ import {
   let healthCheckTimer = null;          // setInterval handle for the sweep
   let connectionHealthy = false;        // flips true once we've seen ≥1 peer
 
+  // ─── Position ghost mode ─────────────────────────────────────────────────
+  // When true, broadcastPosition() silently skips sending — our dot
+  // disappears from every other player's minimap. Toggle via the hidden
+  // shortcut Ctrl+Shift+F11 (unbound in all major browsers).
+  // Persisted in sessionStorage so it survives soft reloads but resets
+  // when the tab is closed (intentional — a fresh session should broadcast).
+  let positionGhostMode = (function () {
+    try { return sessionStorage.getItem('_p2p_ghost') === '1'; } catch (e) { return false; }
+  })();
+
   // ─── Room setup (called both on first init and on rejoin) ───────────────
   function setupRoom() {
     const roomConfig = { appId: APP_ID };
@@ -425,6 +435,20 @@ import {
 
     initChatUI();
     updateUI();
+
+    // ─── Hidden ghost-mode shortcut: Ctrl+Shift+F11 ──────────────────────
+    // Toggles position broadcasting on/off. Chosen because F11 alone is
+    // fullscreen (browser-reserved), but Ctrl+Shift+F11 is unbound in
+    // Chrome, Firefox, Edge, and Safari — unlikely to be guessed or hit
+    // accidentally. No visual confirmation by design; the only tell is
+    // your dot disappearing from other players' minimaps.
+    document.addEventListener('keydown', function (e) {
+      if (e.code === 'F11' && e.ctrlKey && e.shiftKey) {
+        e.preventDefault();
+        positionGhostMode = !positionGhostMode;
+        try { sessionStorage.setItem('_p2p_ghost', positionGhostMode ? '1' : '0'); } catch (_) {}
+      }
+    }, { capture: true });
   }
 
   // ─── Keep the player/chat panel visible during spectator mode ──────────
@@ -691,6 +715,7 @@ import {
   // player's own activeColorPalette entry (i.e. post brightness/custom-color
   // settings) — exactly what they see on their own screen.
   function broadcastPosition() {
+    if (positionGhostMode) return; // ghost mode active — position hidden from peers
     const T = window.TamState;
     if (!T || !T.isGameActive) return;
     if (T.localPlayer && T.localPlayer.de !== null) return; // don't broadcast while dead

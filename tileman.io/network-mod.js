@@ -62,6 +62,13 @@ import {
   // How long to wait after detecting zero peers before triggering a full
   // room rejoin (tab is connected but nobody can see us / we can't see them).
   const REJOIN_EMPTY_TIMEOUT_MS = 8000;
+  // Grace period after mod init before the health watcher is allowed to
+  // start tracking empty-room time. WebRTC signaling + STUN negotiation
+  // can easily take 3-5s on a cold start — without this, emptyRoomSince
+  // starts ticking immediately and a REJOIN_EMPTY_TIMEOUT_MS=8s window
+  // races the very first handshake, triggering a spurious rejoin before
+  // a single peer has had a chance to connect.
+  const STARTUP_GRACE_MS = 10000;
   // Back-off ceiling for consecutive failed-reconnect attempts (ms).
   const MAX_REJOIN_BACKOFF_MS = 30000;
   const DELTA_HZ = 24;                         // state ticks/sec sent to spectators. This constant used to be
@@ -139,6 +146,7 @@ import {
   let isRejoining = false;              // guard against overlapping rejoin attempts
   let healthCheckTimer = null;          // setInterval handle for the sweep
   let connectionHealthy = false;        // flips true once we've seen ≥1 peer
+  let modInitTime = null;               // set in initializeMod(); health watcher ignores empty-room before STARTUP_GRACE_MS
 
   // ─── Position ghost mode ─────────────────────────────────────────────────
   // When true, broadcastPosition() silently skips sending — our dot
@@ -261,9 +269,17 @@ import {
       //    We only consider it "empty" after the connection has been healthy
       //    at least once — if we're still in the initial join phase and haven't
       //    seen anyone yet we give it more time via REJOIN_EMPTY_TIMEOUT_MS.
+      //    Additionally, never start the empty-room clock until STARTUP_GRACE_MS
+      //    has elapsed since mod init — WebRTC signaling can take 3-5s cold,
+      //    and starting the clock at t=0 causes a spurious rejoin on page load
+      //    before the first peer ever gets a chance to connect.
+      const pastGracePeriod = modInitTime !== null && (now - modInitTime) > STARTUP_GRACE_MS;
       const visiblePeers = playerRegistry.size;
       if (visiblePeers === 0) {
-        if (emptyRoomSince === null) {
+        if (!pastGracePeriod) {
+          // Still in startup grace window — don't start the empty-room clock yet.
+          emptyRoomSince = null;
+        } else if (emptyRoomSince === null) {
           emptyRoomSince = now;
         } else if (now - emptyRoomSince > REJOIN_EMPTY_TIMEOUT_MS) {
           console.info('[P2P] room has been empty for',
@@ -404,6 +420,7 @@ import {
   } // end wireActions()
 
   function initializeMod() {
+    modInitTime = Date.now();
     setupRoom();
     startHealthWatcher();
 
@@ -721,6 +738,20 @@ import {
     if (T.localPlayer && T.localPlayer.de !== null) return; // don't broadcast while dead
     const pos = T.getSelfPos();
     if (!pos) return;
+
+    // selectedRegion and selectedMode start as undefined until the player
+    // clicks their region/mode buttons. gridSize is undefined until the server
+    // sends a config packet mid-match. Broadcasting any of these as undefined
+    // means every receiving peer will store undefined into their
+    // remoteMatchPositions entry — and getRemoteMatchPlayers() strict-equality
+    // filters on all three fields, so NOBODY passes the filter and the minimap
+    // stays empty for everyone. Skip the broadcast entirely until all three
+    // are resolved so we never poison peers' position maps with bad data.
+    const region = T.selectedRegion;
+    const mode = T.selectedMode;
+    const gridSize = T.gridSize;
+    if (!region || !mode || !gridSize) return;
+
     const rawColor = T.getSelfColor();
     const activeColor = (T.activeColorPalette && T.activeColorPalette[rawColor]) || rawColor;
     positionAction.send({
@@ -730,9 +761,9 @@ import {
       color: rawColor,
       activeColor,
       name: T.getSelfName() || 'Player',
-      region: T.selectedRegion,
-      mode: T.selectedMode,
-      gridSize: T.gridSize,
+      region,
+      mode,
+      gridSize,
     });
   }
 
@@ -755,9 +786,22 @@ import {
     const region = T.selectedRegion;
     const mode = T.selectedMode;
     const gridSize = T.gridSize;
+
+    // If our own state isn't resolved yet, we have nothing valid to match
+    // against. Returning [] is correct — we genuinely don't know who's on
+    // our map yet. Also guards against undefined===undefined false-positives
+    // where a peer with unresolved state would spuriously match us.
+    if (!region || !mode || !gridSize) return [];
+
     const out = [];
     remoteMatchPositions.forEach((data) => {
-      if (data.region === region && data.mode === mode && data.gridSize === gridSize) {
+      // Extra guard on the peer side: skip any entry that arrived before the
+      // peer's own region/mode/gridSize was resolved (broadcastPosition now
+      // skips those, but old clients or race-condition packets could still
+      // send them). undefined===region would be false here, so this is just
+      // documenting the intent — the strict equality check already handles it.
+      if (data.region && data.mode && data.gridSize &&
+          data.region === region && data.mode === mode && data.gridSize === gridSize) {
         out.push({ id: data.id, x: data.x, y: data.y, color: data.activeColor || data.color, name: data.name });
       }
     });
